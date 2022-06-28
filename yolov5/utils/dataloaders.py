@@ -246,7 +246,7 @@ class LoadImages:
         overlay = img0[self.roi[0][1]:self.roi[1][1], self.roi[0][0]:self.roi[1][0]]
         background[self.roi[0][1]:self.roi[1][1], self.roi[0][0]:self.roi[1][0]] = overlay
         # Padded resize
-        img = letterbox(img0, self.img_size, stride=self.stride, auto=self.auto)[0]
+        img = letterbox(background, self.img_size, stride=self.stride, auto=self.auto)[0]
 
         # Convert
         img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
