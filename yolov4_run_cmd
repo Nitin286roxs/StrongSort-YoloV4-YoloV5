@@ -1,0 +1,3 @@
+python track.py --yolo-weights yolov4/best_225.pt --strong-sort osnet_x0_25_market1501.pt --source Stream_245_7.mp4 --conf-thres 0.1 --iou-thres 0.1 --save-vid --model-version yolov4 --cfg yolov4/models/yolov4-csp-custom.cfg  --device 0 --fps 25
+
+python track.py --yolo-weights yolov4/best_225.pt --strong-sort osnet_x0_25_market1501.pt --source rtsp://admin:admin@14.97.123.245/:554/0/main  --conf-thres 0.1 --iou-thres 0.1 --save-vid --model-version yolov4 --cfg yolov4/models/yolov4-csp-custom.cfg  --device 0 --fps 25
