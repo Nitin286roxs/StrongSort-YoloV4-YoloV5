@@ -1,0 +1,19 @@
+#FROM ubuntu:20.04 as dev
+FROM nvidia/cuda:11.6.0-base-ubuntu20.04 as dev 
+LABEL maintainer="nitin@safepro.com"
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update -y\
+ && apt-get upgrade -y \
+ && apt-get install -y python3 python3-pip \
+ && apt-get install -y libglib2.0-0 libsm6 libxrender1 libxext6
+#RUN cp -rf  StrongSort-YoloV4-YoloV5/* app/
+#RUN cd /app/
+RUN apt install -y git 
+WORKDIR /app/
+RUN git clone https://github.com/Nitin286roxs/StrongSort-YoloV4-YoloV5.git
+RUN cd /app/
+RUN pip install -r /app/StrongSort-YoloV4-YoloV5/requirement.txt
+RUN pip install -r /app/StrongSort-YoloV4-YoloV5/requirement_yolo.txt
+RUN pip install opencv-python==4.2.0.34
+ENTRYPOINT ["python track.py -externalconfig config/args.yaml"]
+
