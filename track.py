@@ -32,6 +32,7 @@ if str(ROOT / 'strong_sort') not in sys.path:
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 import logging
+from yaml_reader import YamlReader
 from yolov4.models.models import *
 from yolov4.utils.datasets import *
 from yolov4.utils.datasets import LoadStreamsV4, LoadImagesV4
@@ -68,42 +69,75 @@ def iou_check(boxA, boxB):
     # areas - the interesection area
     return interArea / float(boxAArea) #+ boxBArea - interArea)
 @torch.no_grad()
-def run(
-        source='0',
-        yolo_weights=WEIGHTS / 'yolov5m.pt',  # model.pt path(s),
-        strong_sort_weights=WEIGHTS / 'osnet_x0_25_msmt17.pt',  # model.pt path,
-        config_strongsort=ROOT / 'strong_sort/configs/strong_sort.yaml',
-        imgsz=(640, 640),  # inference size (height, width)
-        conf_thres=0.25,  # confidence threshold
-        iou_thres=0.45,  # NMS IOU threshold
-        max_det=1000,  # maximum detections per image
-        device='',  # cuda device, i.e. 0 or 0,1,2,3 or cpu
-        show_vid=False,  # show results
-        save_txt=False,  # save results to *.txt
-        save_conf=False,  # save confidences in --save-txt labels
-        save_crop=False,  # save cropped prediction boxes
-        save_vid=False,  # save confidences in --save-txt labels
-        nosave=False,  # do not save images/videos
-        classes=None,  # filter by class: --class 0, or --class 0 2 3
-        agnostic_nms=False,  # class-agnostic NMS
-        augment=False,  # augmented inference
-        visualize=False,  # visualize features
-        update=False,  # update all models
-        project=ROOT / 'runs/track',  # save results to project/name
-        name='exp',  # save results to project/name
-        exist_ok=False,  # existing project/name ok, do not increment
-        line_thickness=3,  # bounding box thickness (pixels)
-        hide_labels=False,  # hide labels
-        hide_conf=False,  # hide confidences
-        hide_class=False,  # hide IDs
-        half=False,  # use FP16 half-precision inference
-        dnn=False,  # use OpenCV DNN for ONNX inference
-        model_version="yolov5", #yolo model-type yolov4 or v5
-        cfg="", #Original cfg file if model type is yolov4
-        fps=5, #Input framesrate
-):
+#def run(
+#        source='0',
+#        yolo_weights=WEIGHTS / 'yolov5m.pt',  # model.pt path(s),
+#        strong_sort_weights=WEIGHTS / 'osnet_x0_25_msmt17.pt',  # model.pt path,
+#        config_strongsort=ROOT / 'strong_sort/configs/strong_sort.yaml',
+#        imgsz=(640, 640),  # inference size (height, width)
+#        conf_thres=0.25,  # confidence threshold
+#        iou_thres=0.45,  # NMS IOU threshold
+#        max_det=1000,  # maximum detections per image
+#        device='',  # cuda device, i.e. 0 or 0,1,2,3 or cpu
+#        show_vid=False,  # show results
+#        save_txt=False,  # save results to *.txt
+#        save_conf=False,  # save confidences in --save-txt labels
+#        save_crop=False,  # save cropped prediction boxes
+#        save_vid=False,  # save confidences in --save-txt labels
+#        nosave=False,  # do not save images/videos
+#        classes=None,  # filter by class: --class 0, or --class 0 2 3
+#        agnostic_nms=False,  # class-agnostic NMS
+#        augment=False,  # augmented inference
+#        visualize=False,  # visualize features
+#        update=False,  # update all models
+#        project=ROOT / 'runs/track',  # save results to project/name
+#        name='exp',  # save results to project/name
+#        exist_ok=False,  # existing project/name ok, do not increment
+#        line_thickness=3,  # bounding box thickness (pixels)
+#        hide_labels=False,  # hide labels
+#        hide_conf=False,  # hide confidences
+#        hide_class=False,  # hide IDs
+#        half=False,  # use FP16 half-precision inference
+#        dnn=False,  # use OpenCV DNN for ONNX inference
+#        model_version="yolov5", #yolo model-type yolov4 or v5
+#        cfg="", #Original cfg file if model type is yolov4
+#        fps=5, #Input framesrate
+#):
+def run(objyaml):
+    source= objyaml.source
+    yolo_weights = str(objyaml.yolo_weights)  # model.pt path(s),
+    strong_sort_weights = objyaml.strong_sort  # model.pt path,
+    config_strongsort = ROOT / 'strong_sort/configs/strong_sort.yaml'
+    imgsz = (640, 640) # inference size (height, width)
+    conf_thres = objyaml.conf_thres  # confidence threshold
+    iou_thres = objyaml.iou_thres  # NMS IOU threshold
+    max_det = 1000  # maximum detections per image
+    device = objyaml.device  # cuda device, i.e. 0 or 0,1,2,3 or cpu
+    show_vid = False  # show results
+    save_txt = False  # save results to *.txt
+    save_conf = False  # save confidences in --save-txt labels
+    save_crop = False  # save cropped prediction boxes
+    save_vid = objyaml.save_vid  # save confidences in --save-txt labels
+    nosave = False  # do not save images/videos
+    classes = None  # filter by class: --class 0, or --class 0 2 3
+    agnostic_nms = False,  # class-agnostic NMS
+    augment = False  # augmented inference
+    visualize = False  # visualize features
+    update = False  # update all models
+    project = ROOT / 'runs/track'  # save results to project/name
+    name = 'exp'  # save results to project/name
+    exist_ok = False  # existing project/name ok, do not increment
+    line_thickness = 3  # bounding box thickness (pixels)
+    hide_labels = False  # hide labels
+    hide_conf = False  # hide confidences
+    hide_class = False  # hide IDs
+    half = False  # use FP16 half-precision inference
+    dnn = False  # use OpenCV DNN for ONNX inference
+    model_version = objyaml.model_version #yolo model-type yolov4 or v5
+    cfg = objyaml.cfg #Original cfg file if model type is yolov4
+    fps = objyaml.fps #Input framesrate
 
-    source = str(source)
+    #source = str(objyaml.source)
     save_img = not nosave and not source.endswith('.txt')  # save inference images
     is_file = Path(source).suffix[1:] in (VID_FORMATS)
     is_url = source.lower().startswith(('rtsp://', 'rtmp://', 'http://', 'https://'))
@@ -135,7 +169,7 @@ def run(
         model = Darknet(cfg, imgsz).cuda()
         try:
             print(f"yolo_weights: {yolo_weights[0]}")
-            model.load_state_dict(torch.load(yolo_weights[0], map_location=device)['model'])
+            model.load_state_dict(torch.load(yolo_weights, map_location=device)['model'])
             print("model loaded")
             names = "tyre"
             #stride, names, pt = model.stride, model.names, model.pt
@@ -144,7 +178,7 @@ def run(
             imgsz = (640,640)#check_img_sizeV4(imgsz, s=model.stride.max())  # check img_size
         except:
             print("I am here!!")
-            load_darknet_weights(model, yolo_weights[0])
+            load_darknet_weights(model, yolo_weights)
         model.to(device).eval()
         if half:
             model.half()  # to FP16
@@ -176,7 +210,7 @@ def run(
 
     # initialize StrongSORT
     cfg = get_config()
-    cfg.merge_from_file(opt.config_strongsort)
+    cfg.merge_from_file(config_strongsort)
 
     # Create as many strong sort instances as there are video sources
     strongsort_list = []
@@ -220,19 +254,19 @@ def run(
         dt[0] += t2 - t1
 
         # Inference
-        visualize = increment_path(save_dir / Path(path[0]).stem, mkdir=True) if opt.visualize else False
+        visualize = increment_path(save_dir / Path(path[0]).stem, mkdir=True) if visualize else False
         if model_version=="yolov5":
-            pred = model(im, augment=opt.augment, visualize=visualize)
+            pred = model(im, augment=augment, visualize=visualize)
         else:
-            pred = model(im, augment=opt.augment)
+            pred = model(im, augment=augment)
         t3 = time_sync()
         dt[1] += t3 - t2
 
         # Apply NMS
         if model_version=="yolov5":
-            pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, opt.classes, opt.agnostic_nms, max_det=opt.max_det)
+            pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
         else:
-            pred = non_max_suppressionV4(pred, opt.conf_thres, opt.iou_thres, opt.classes, opt.agnostic_nms)
+            pred = non_max_suppressionV4(pred, conf_thres, iou_thres, classes, agnostic_nms)
         dt[2] += time_sync() - t3
 
         # Process detections
@@ -447,9 +481,18 @@ def parse_opt():
 
 def main(opt):
     check_requirements(requirements=ROOT / 'requirements.txt', exclude=('tensorboard', 'thop'))
-    run(**vars(opt))
+    #run(**vars(opt))
+    run(opt)
 
 
 if __name__ == "__main__":
-    opt = parse_opt()
-    main(opt)
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '-externalconfig', help='External config file path')
+    args = parser.parse_args()
+    external_config_file = args.externalconfig.strip()
+    objYaml = YamlReader(external_config_file)
+    objYaml.fetch_config()
+    #opt = parse_opt()
+    #opt = YamlReader(opt)
+    main(objYaml)
