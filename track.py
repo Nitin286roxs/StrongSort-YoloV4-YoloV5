@@ -254,19 +254,19 @@ def run(objyaml):
         dt[0] += t2 - t1
 
         # Inference
-        visualize = increment_path(save_dir / Path(path[0]).stem, mkdir=True) if opt.visualize else False
+        visualize = increment_path(save_dir / Path(path[0]).stem, mkdir=True) if visualize else False
         if model_version=="yolov5":
-            pred = model(im, augment=opt.augment, visualize=visualize)
+            pred = model(im, augment=augment, visualize=visualize)
         else:
-            pred = model(im, augment=opt.augment)
+            pred = model(im, augment=augment)
         t3 = time_sync()
         dt[1] += t3 - t2
 
         # Apply NMS
         if model_version=="yolov5":
-            pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, opt.classes, opt.agnostic_nms, max_det=opt.max_det)
+            pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
         else:
-            pred = non_max_suppressionV4(pred, opt.conf_thres, opt.iou_thres, opt.classes, opt.agnostic_nms)
+            pred = non_max_suppressionV4(pred, conf_thres, iou_thres, classes, agnostic_nms)
         dt[2] += time_sync() - t3
 
         # Process detections

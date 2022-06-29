@@ -1,6 +1,6 @@
 yolo-weights: "best_225.pt"                        # model.pt path(s)
 strong-sort: "osnet_x0_25_market1501.pt"                  # model.pt path,
-source: "rtsp://admin:admin@192.168.0.142:554/Streaming/Channels/2" #"rtsp://admin:admin@14.97.123.245/:554/0/main" 
+source: "Stream_245_9.mp4" #"rtsp://admin:admin@192.168.0.142:554/Streaming/Channels/2" #"rtsp://admin:admin@14.97.123.245/:554/0/main" 
 conf-thres: 0.1                                         # confidence threshold
 iou-thres: 0.1                                          # NMS IOU threshold
 save-vid: True                                          # save confidences in --save-txt labels
