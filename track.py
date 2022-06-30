@@ -107,7 +107,7 @@ def run(objyaml):
     source= objyaml.source
     yolo_weights = str(objyaml.yolo_weights)  # model.pt path(s),
     strong_sort_weights = objyaml.strong_sort  # model.pt path,
-    config_strongsort = ROOT / 'strong_sort/configs/strong_sort.yaml'
+    config_strongsort = 'strong_sort/configs/strong_sort.yaml'
     imgsz = (640, 640) # inference size (height, width)
     conf_thres = objyaml.conf_thres  # confidence threshold
     iou_thres = objyaml.iou_thres  # NMS IOU threshold
