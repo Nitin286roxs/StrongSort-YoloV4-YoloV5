@@ -15,5 +15,6 @@ RUN cd /app/
 RUN pip install -r /app/StrongSort-YoloV4-YoloV5/requirement.txt
 RUN pip install -r /app/StrongSort-YoloV4-YoloV5/requirement_yolo.txt
 RUN pip install opencv-python==4.2.0.34
-ENTRYPOINT ["python track.py -externalconfig config/args.yaml"]
+COPY run.sh /app/
+ENTRYPOINT ["./run.sh"]
 
