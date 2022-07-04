@@ -1,4 +1,6 @@
+FROM api_layer:22.07.04  as apilayer_base
 FROM nvidia/cuda:11.6.0-base-ubuntu20.04 as dev 
+
 LABEL maintainer="nitin@safepro.com"
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -y\
@@ -9,9 +11,18 @@ RUN apt install -y git
 WORKDIR /app/
 RUN git clone https://github.com/Nitin286roxs/StrongSort-YoloV4-YoloV5.git
 RUN cd /app/
+COPY --from=apilayer_base /opt/apilayer-*.whl /tmp/ApiLayer/
+RUN pip3 install /tmp/ApiLayer/apilayer-*.whl
+COPY extended_apilayer.py /app/StrongSort-YoloV4-YoloV5/
 RUN pip install -r /app/StrongSort-YoloV4-YoloV5/requirement.txt
 RUN pip install -r /app/StrongSort-YoloV4-YoloV5/requirement_yolo.txt
 RUN pip install opencv-python==4.2.0.34
 COPY run.sh /app/StrongSort-YoloV4-YoloV5/
+
+COPY --from=apilayer_base /opt/apilayer-*.whl /tmp/ApiLayer/
+RUN pip3 install /tmp/ApiLayer/apilayer-*.whl
+COPY extended_apilayer.py /app/StrongSort-YoloV4-YoloV5/
+
+WORKDIR /app/StrongSort-YoloV4-YoloV5/
 ENTRYPOINT ["/app/StrongSort-YoloV4-YoloV5/run.sh"]
 

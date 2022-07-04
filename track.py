@@ -12,13 +12,18 @@ os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
-
+try:
+    RUN_MODE = int(os.environ["RUN_MODE"])
+except KeyError:
+    RUN_MODE = 1
 import sys
+import base64
+import threading
 import numpy as np
 from pathlib import Path
 import torch
 import torch.backends.cudnn as cudnn
-
+import json
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # yolov5 strongsort root directory
 WEIGHTS = ROOT / 'weights'
@@ -47,10 +52,32 @@ from yolov5.utils.torch_utils import select_device, time_sync
 from yolov5.utils.plots import Annotator, colors, save_one_box
 from strong_sort.utils.parser import get_config
 from strong_sort.strong_sort import StrongSORT
+#TODO Adding api Layer
+from extended_apilayer import ExtApiLayer, add_method
 
 # remove duplicated stream handler to avoid duplicated logging
 logging.getLogger().removeHandler(logging.getLogger().handlers[0])
 
+LOCK = threading.Lock()
+
+@add_method(ExtApiLayer)
+def process_input(md, img_string_tuples):
+    global MD, IMG_STRING_TUPLES, RESPONSE, RESPONSE_SENT
+    LOCK.acquire()
+    print("Lock Acquired !!")
+    print(f"md: {md}")
+    print(f"length of image string: {img_string_tuples[0]['len']}")
+    MD = md
+    IMG_STRING_TUPLES = img_string_tuples
+    RESPONSE = None
+    RESPONSE_SENT = False
+    while not RESPONSE:
+        time.sleep(.001)
+    RESPONSE_SENT = True
+    #TO PREVENT OVERRIDE RESPONSE
+    COPY_RESPONSE = RESPONSE
+    LOCK.release()
+    return COPY_RESPONSE 
 
 #Intersection over union check for two objects
 def iou_check(boxA, boxB):
@@ -68,42 +95,263 @@ def iou_check(boxA, boxB):
     # area and dividing it by the sum of prediction + ground-truth
     # areas - the interesection area
     return interArea / float(boxAArea) #+ boxBArea - interArea)
+
+def letterbox_V5(im, new_shape=(640, 640), color=(114, 114, 114), auto=True, scaleFill=False, scaleup=True, stride=32):
+    # Resize and pad image while meeting stride-multiple constraints
+    shape = im.shape[:2]  # current shape [height, width]
+    if isinstance(new_shape, int):
+        new_shape = (new_shape, new_shape)
+
+    # Scale ratio (new / old)
+    r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
+    if not scaleup:  # only scale down, do not scale up (for better val mAP)
+        r = min(r, 1.0)
+
+    # Compute padding
+    ratio = r, r  # width, height ratios
+    new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
+    dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]  # wh padding
+    if auto:  # minimum rectangle
+        dw, dh = np.mod(dw, stride), np.mod(dh, stride)  # wh padding
+    elif scaleFill:  # stretch
+        dw, dh = 0.0, 0.0
+        new_unpad = (new_shape[1], new_shape[0])
+        ratio = new_shape[1] / shape[1], new_shape[0] / shape[0]  # width, height ratios
+
+    dw /= 2  # divide padding into 2 sides
+    dh /= 2
+
+    if shape[::-1] != new_unpad:  # resize
+        im = cv2.resize(im, new_unpad, interpolation=cv2.INTER_LINEAR)
+    top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
+    left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
+    im = cv2.copyMakeBorder(im, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)  # add border
+    return im, ratio, (dw, dh)
+
+def letterbox_V4(img, new_shape=(640, 640), color=(114, 114, 114), auto=True, scaleFill=False, scaleup=True, auto_size=32):
+    # Resize image to a 32-pixel-multiple rectangle https://github.com/ultralytics/yolov3/issues/232
+    shape = img.shape[:2]  # current shape [height, width]
+    if isinstance(new_shape, int):
+        new_shape = (new_shape, new_shape)
+
+    # Scale ratio (new / old)
+    r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
+    if not scaleup:  # only scale down, do not scale up (for better test mAP)
+        r = min(r, 1.0)
+
+    # Compute padding
+    ratio = r, r  # width, height ratios
+    new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
+    dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]  # wh padding
+    if auto:  # minimum rectangle
+        dw, dh = np.mod(dw, auto_size), np.mod(dh, auto_size)  # wh padding
+    elif scaleFill:  # stretch
+        dw, dh = 0.0, 0.0
+        new_unpad = (new_shape[1], new_shape[0])
+        ratio = new_shape[1] / shape[1], new_shape[0] / shape[0]  # width, height ratios
+
+    dw /= 2  # divide padding into 2 sides
+    dh /= 2
+
+    if shape[::-1] != new_unpad:  # resize
+        img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
+    top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
+    left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
+    img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)  # add border
+    return img, ratio, (dw, dh)
+
+def process_frame(im0, stride, nr_sources, model, device, half, model_version, visualize, roi, pt,\
+                  conf_thres, iou_thres, classes, agnostic_nms, cfg, strongsort_list,\
+                  save_vid, save_crop, save_txt, show_vid, max_det, img_size=640):
+    #TODO
+    '''
+    Cropping the ROI part from image dataset for inference to improve tracking
+    '''
+    assert im0 is not None, 'Image Not Found ' + path
+    background = np.full((im0.shape[0], im0.shape[1], 3) , (114,114,114), np.uint8)
+    overlay = im0[roi[1]:roi[3], roi[0]:roi[2]]
+    background[roi[1]:roi[3], roi[0]:roi[2]] = overlay
+    auto_size=64
+    dt, seen = [0.0, 0.0, 0.0, 0.0], 0
+    curr_frames, prev_frames = [None] * nr_sources, [None] * nr_sources
+    augment = False
+    # Padded resize
+    if model_version == "yoloV5":
+        im = letterbox_V5(background, img_size, stride=stride, auto=pt)[0]
+    else:
+        im = letterbox_V4(background, new_shape=img_size, auto_size=auto_size)[0]
+
+    # Convert
+    im = im.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
+    im = np.ascontiguousarray(im)
+
+    #return path, img, img0, self.cap, s
+ 
+    t1 = time_sync()
+    im = torch.from_numpy(im).to(device)
+    im = im.half() if half else im.float()  # uint8 to fp16/32
+    im /= 255.0  # 0 - 255 to 0.0 - 1.0
+    if len(im.shape) == 3:
+        im = im[None]  # expand for batch dim
+    t2 = time_sync()
+    dt[0] += t2 - t1
+
+    # Inference
+    #visualize = increment_path(save_dir / Path(path[0]).stem, mkdir=True) if visualize else False
+    if model_version=="yolov5":
+        pred = model(im, augment=augment, visualize=visualize)
+    else:
+        pred = model(im, augment=augment)
+    t3 = time_sync()
+    dt[1] += t3 - t2
+
+    # Apply NMS
+    if model_version=="yolov5":
+        pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
+    else:
+        pred = non_max_suppressionV4(pred, conf_thres, iou_thres, classes, agnostic_nms)
+    dt[2] += time_sync() - t3
+
+    # Process detections
+    for i, det in enumerate(pred):  # detections per image
+        seen += 1
+        #if webcam:  # nr_sources >= 1
+        #    p, im0, _ = path[i], im0s[i].copy(), dataset.count
+        #    p = Path(p)  # to Path
+        #    s += f'{i}: '
+        #    txt_file_name = p.name
+        #    save_path = str(save_dir / p.name)  # im.jpg, vid.mp4, ...
+        #else:
+        #    p, im0, _ = path, im0s.copy(), getattr(dataset, 'frame', 0)
+        #    p = Path(p)  # to Path
+        #    # video file
+        #    if source.endswith(VID_FORMATS):
+        #        txt_file_name = p.stem
+        #        save_path = str(save_dir / p.name)  # im.jpg, vid.mp4, ...
+        #    # folder with imgs
+        #    else:
+        #        txt_file_name = p.parent.name  # get folder name containing current img
+        #        save_path = str(save_dir / p.parent.name)  # im.jpg, vid.mp4, ...
+        print(f"i: {i}")
+        curr_frames[i] = im0
+
+        #txt_path = str(save_dir / 'tracks' / txt_file_name)  # im.txt
+        #s += '%gx%g ' % im.shape[2:]  # print string
+        gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
+        imc = im0.copy() if save_crop else im0  # for save_crop
+        #im0 = cv2.rectangle(im0, (roi[0], roi[1]), (roi[2], roi[3]), (0, 0, 255), 2)
+        pts = np.array(polygon_roi,np.int32)
+        pts = pts.reshape((-1, 1, 2))
+        isClosed = True
+        color = (0, 255, 0)
+        thickness = 2
+        im0 = cv2.polylines(im0, [pts],
+                  isClosed, color, thickness)
+        im0 = cv2.line(im0, line[0],line[1], (255,0,0), thickness)
+        annotator = Annotator(im0, line_width=2, pil=not ascii)
+        if cfg.STRONGSORT.ECC:  # camera motion compensation
+            strongsort_list[i].tracker.camera_update(prev_frames[i], curr_frames[i])
+
+        if det is not None and len(det):
+            # Rescale boxes from img_size to im0 size
+            det[:, :4] = scale_coords(im.shape[2:], det[:, :4], im0.shape).round()
+
+            # Print results
+            for c in det[:, -1].unique():
+                n = (det[:, -1] == c).sum()  # detections per class
+                s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
+
+            xywhs = xyxy2xywh(det[:, 0:4])
+            # Write results
+            #for *xyxy, conf, cls in det:
+            #    xywhs_norma = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+            #print(f"yolo co-ord : {xywhs}")
+            confs = det[:, 4]
+            clss = det[:, 5]
+
+            # pass detections to strongsort
+            t4 = time_sync()
+            outputs[i] = strongsort_list[i].update(xywhs.cpu(), confs.cpu(), clss.cpu(), im0)
+            t5 = time_sync()
+            dt[3] += t5 - t4
+
+            # draw boxes for visualization
+            if len(outputs[i]) > 0:
+                for j, (output, conf) in enumerate(zip(outputs[i], confs)):
+    
+                    bboxes = output[0:4]
+                    #print(f"yolo deepsort co-ord : {bboxes}")
+                    id = output[4]
+                    cls = output[5]
+
+                    if save_txt:
+                        # to MOT format
+                        bbox_left = output[0]
+                        bbox_top = output[1]
+                        bbox_w = output[2] - output[0]
+                        bbox_h = output[3] - output[1]
+                        # Write MOT compliant results to file
+                        with open(txt_path + '.txt', 'a') as f:
+                            f.write(('%g ' * 10 + '\n') % (frame_idx + 1, id, bbox_left,  # MOT format
+                                                           bbox_top, bbox_w, bbox_h, -1, -1, -1, i))
+
+                    if save_vid or save_crop or show_vid:  # Add bbox to image
+                        c = int(cls)  # integer class
+                        id = int(id)  # integer id
+                        roi = [polygon_roi[0][0], polygon_roi[0][1],\
+                                             polygon_roi[2][0], polygon_roi[2][1]]
+                        #iou_conf = iou_check(bboxes, roi)
+                        label = None if hide_labels else (f'{id} {names[c]}' if hide_conf else \
+                            (f'{id} {conf:.2f}' if hide_class else f'{id} {names[c]} {conf:.2f}'))
+                        #iou_conf = iou_check(bboxes, roi)
+                        #print(f"iou_conf: {iou_conf}")
+                        if True: #iou_conf > 0.1:
+                            tyre_id = f'{id:0.0f}'
+                            if tyre_id not in unique_tyre_centroid:
+                                unique_tyre_centroid = {}
+                                unique_tyre_centroid[tyre_id] = {"trail-path": [], "isLoaded": False}
+                            centroid = int(bboxes[0]) , int((bboxes[1] + bboxes[3])// 2)
+                            unique_tyre_centroid[tyre_id]["trail-path"].append(centroid)
+                            for point in unique_tyre_centroid[tyre_id]["trail-path"]:
+                                print(f"point: {point}")
+                                annotator.im = cv2.circle(annotator.im, point, 5, (255,0,255), thickness=3)
+                            #TODO Line Crossing Logic
+                            '''
+                            If mid poit of tyre's TOP-LEFT and BOTTOM-LEFT cross the drawn line then We can say tyre is 
+                            loaded.
+                            '''
+                            #TODO 
+                            '''
+                            For Futur, We will implement
+                            ENTRY and EXIT Logic 
+                            '''
+                            '''
+                            Equation of line
+                            A(X1, Y1), B(X2, Y2)
+                            '''
+                            if not unique_tyre_centroid[tyre_id]["isLoaded"]:
+                                (X1,Y1), (X2,Y2) = line[0], line[1]
+                                PX,PY = centroid
+                                Z = PX*(Y2-Y1)-PY*(X2-X1)-X1*(Y2-Y1)+Y1*(X2-X1)
+                                if Z <= 0:
+                                    #Centroid is on or left side of line, means Tyre is loaded
+                                    unique_tyre_centroid[tyre_id]["isLoaded"] = True
+                            annotator.box_label(bboxes, 1.0,unique_tyre_centroid[tyre_id]["isLoaded"], label, color=colors(c, True))
+                        if save_crop:
+                            txt_file_name = txt_file_name if (isinstance(path, list) and len(path) > 1) else ''
+                            save_one_box(bboxes, imc, file=save_dir / 'crops' / txt_file_name / names[c] / f'{id}' / f'{p.stem}.jpg', BGR=True)
+
+            LOGGER.info(f'{s}Done. YOLO:({t3 - t2:.3f}s), StrongSORT:({t5 - t4:.3f}s)')
+
+        else:
+            strongsort_list[i].increment_ages()
+            LOGGER.info('No detections')
+
+    return im0
+
 @torch.no_grad()
-#def run(
-#        source='0',
-#        yolo_weights=WEIGHTS / 'yolov5m.pt',  # model.pt path(s),
-#        strong_sort_weights=WEIGHTS / 'osnet_x0_25_msmt17.pt',  # model.pt path,
-#        config_strongsort=ROOT / 'strong_sort/configs/strong_sort.yaml',
-#        imgsz=(640, 640),  # inference size (height, width)
-#        conf_thres=0.25,  # confidence threshold
-#        iou_thres=0.45,  # NMS IOU threshold
-#        max_det=1000,  # maximum detections per image
-#        device='',  # cuda device, i.e. 0 or 0,1,2,3 or cpu
-#        show_vid=False,  # show results
-#        save_txt=False,  # save results to *.txt
-#        save_conf=False,  # save confidences in --save-txt labels
-#        save_crop=False,  # save cropped prediction boxes
-#        save_vid=False,  # save confidences in --save-txt labels
-#        nosave=False,  # do not save images/videos
-#        classes=None,  # filter by class: --class 0, or --class 0 2 3
-#        agnostic_nms=False,  # class-agnostic NMS
-#        augment=False,  # augmented inference
-#        visualize=False,  # visualize features
-#        update=False,  # update all models
-#        project=ROOT / 'runs/track',  # save results to project/name
-#        name='exp',  # save results to project/name
-#        exist_ok=False,  # existing project/name ok, do not increment
-#        line_thickness=3,  # bounding box thickness (pixels)
-#        hide_labels=False,  # hide labels
-#        hide_conf=False,  # hide confidences
-#        hide_class=False,  # hide IDs
-#        half=False,  # use FP16 half-precision inference
-#        dnn=False,  # use OpenCV DNN for ONNX inference
-#        model_version="yolov5", #yolo model-type yolov4 or v5
-#        cfg="", #Original cfg file if model type is yolov4
-#        fps=5, #Input framesrate
-#):
 def run(objyaml):
+    global MD, RESPONSE, RESPONSE_SENT, IMG_STRING_TUPLES
     source= objyaml.source
     yolo_weights = str(objyaml.yolo_weights)  # model.pt path(s),
     strong_sort_weights = objyaml.strong_sort  # model.pt path,
@@ -124,7 +372,8 @@ def run(objyaml):
     augment = False  # augmented inference
     visualize = False  # visualize features
     update = False  # update all models
-    project = ROOT / 'runs/track'  # save results to project/name
+    #project = ROOT / 'runs/track'  # save results to project/name
+    project = '/app/test/'  # save results to project/name
     name = 'exp'  # save results to project/name
     exist_ok = False  # existing project/name ok, do not increment
     line_thickness = 3  # bounding box thickness (pixels)
@@ -136,7 +385,6 @@ def run(objyaml):
     model_version = objyaml.model_version #yolo model-type yolov4 or v5
     cfg = objyaml.cfg #Original cfg file if model type is yolov4
     fps = objyaml.fps #Input framesrate
-
     #source = str(objyaml.source)
     save_img = not nosave and not source.endswith('.txt')  # save inference images
     is_file = Path(source).suffix[1:] in (VID_FORMATS)
@@ -160,6 +408,8 @@ def run(objyaml):
     device = select_device(device)
     half = device.type != 'cpu'
     #device = select_device(device)
+    stride = None
+    pt = None
     if model_version == "yolov5":
         model = DetectMultiBackend(yolo_weights, device=device, dnn=dnn, data=None, fp16=half)
         stride, names, pt = model.stride, model.names, model.pt
@@ -184,36 +434,13 @@ def run(objyaml):
             model.half()  # to FP16
     #imgsz = check_img_size(imgsz, s=stride)  # check image size
 
-    # Dataloader
-    nr_sources = 0
-    if webcam:
-        print("I'm checking webcam!!")
-        show_vid = check_imshow()
-        cudnn.benchmark = True  # set True to speed up constant image size inference
-        if model_version=="yolov5":
-            dataset = LoadStreams(polygon_roi, source ,img_size=imgsz, stride=stride, auto=pt)
-            nr_sources = len(dataset)
-        else:
-            dataset = LoadStreamsV4(polygon_roi, source, img_size=imgsz)
-            nr_sources = 1
-        #nr_sources = len(dataset)        
-    else:
-        print("I'm Here!!")
-        if model_version=="yolov5":
-            dataset = LoadImages(polygon_roi, source, img_size=imgsz, stride=stride, auto=pt)
-        else:
-            save_img = True
-            dataset = LoadImagesV4(polygon_roi, source, img_size=imgsz, auto_size=64)
-        nr_sources = 1
-    #nr_sources = len(dataset)        
-    vid_path, vid_writer, txt_path = [None] * nr_sources, [None] * nr_sources, [None] * nr_sources
-
     # initialize StrongSORT
     cfg = get_config()
     cfg.merge_from_file(config_strongsort)
 
     # Create as many strong sort instances as there are video sources
     strongsort_list = []
+    nr_sources = 1
     for i in range(nr_sources):
         strongsort_list.append(
             StrongSORT(
@@ -229,213 +456,275 @@ def run(objyaml):
 
             )
         )
-    outputs = [None] * nr_sources
-    unique_tyre_centroid = {}
-    # Run tracking
-    if model_version=="yolov5":
-        model.warmup(imgsz=(1 if pt else nr_sources, 3, *imgsz))  # warmup
-    #else:
-    #    im = torch.zeros(*imgsz, dtype=torch.half if self.fp16 else torch.float, device=device)  # input
-    #    model.forward(im)
-    dt, seen = [0.0, 0.0, 0.0, 0.0], 0
-    curr_frames, prev_frames = [None] * nr_sources, [None] * nr_sources
-    print(f"nr_sources: {nr_sources}, curr_frames: {curr_frames} and prev_frames: {prev_frames}")
-    for frame_idx, (path, im, im0s, vid_cap, s) in enumerate(dataset):
-        print(f"s: {s}")
-        print(f"im shape: {len(im)}")
-        print(f"im0 shape: {len(im0s)}")
-        t1 = time_sync()
-        im = torch.from_numpy(im).to(device)
-        im = im.half() if half else im.float()  # uint8 to fp16/32
-        im /= 255.0  # 0 - 255 to 0.0 - 1.0
-        if len(im.shape) == 3:
-            im = im[None]  # expand for batch dim
-        t2 = time_sync()
-        dt[0] += t2 - t1
-
-        # Inference
-        visualize = increment_path(save_dir / Path(path[0]).stem, mkdir=True) if visualize else False
-        if model_version=="yolov5":
-            pred = model(im, augment=augment, visualize=visualize)
-        else:
-            pred = model(im, augment=augment)
-        t3 = time_sync()
-        dt[1] += t3 - t2
-
-        # Apply NMS
-        if model_version=="yolov5":
-            pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
-        else:
-            pred = non_max_suppressionV4(pred, conf_thres, iou_thres, classes, agnostic_nms)
-        dt[2] += time_sync() - t3
-
-        # Process detections
-        for i, det in enumerate(pred):  # detections per image
-            seen += 1
-            if webcam:  # nr_sources >= 1
-                p, im0, _ = path[i], im0s[i].copy(), dataset.count
-                p = Path(p)  # to Path
-                s += f'{i}: '
-                txt_file_name = p.name
-                save_path = str(save_dir / p.name)  # im.jpg, vid.mp4, ...
-            else:
-                p, im0, _ = path, im0s.copy(), getattr(dataset, 'frame', 0)
-                p = Path(p)  # to Path
-                # video file
-                if source.endswith(VID_FORMATS):
-                    txt_file_name = p.stem
-                    save_path = str(save_dir / p.name)  # im.jpg, vid.mp4, ...
-                # folder with imgs
-                else:
-                    txt_file_name = p.parent.name  # get folder name containing current img
-                    save_path = str(save_dir / p.parent.name)  # im.jpg, vid.mp4, ...
-            print(f"i: {i}")
-            curr_frames[i] = im0
-
-            txt_path = str(save_dir / 'tracks' / txt_file_name)  # im.txt
-            s += '%gx%g ' % im.shape[2:]  # print string
-            gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
-            imc = im0.copy() if save_crop else im0  # for save_crop
-            #im0 = cv2.rectangle(im0, (roi[0], roi[1]), (roi[2], roi[3]), (0, 0, 255), 2)
-            pts = np.array(polygon_roi,np.int32)
-            pts = pts.reshape((-1, 1, 2))
-            isClosed = True
-            color = (0, 255, 0)
-            thickness = 2
-            im0 = cv2.polylines(im0, [pts],
-                      isClosed, color, thickness)
-            im0 = cv2.line(im0, line[0],line[1], (255,0,0), thickness)
-            annotator = Annotator(im0, line_width=2, pil=not ascii)
-            if cfg.STRONGSORT.ECC:  # camera motion compensation
-                strongsort_list[i].tracker.camera_update(prev_frames[i], curr_frames[i])
-
-            if det is not None and len(det):
-                # Rescale boxes from img_size to im0 size
-                det[:, :4] = scale_coords(im.shape[2:], det[:, :4], im0.shape).round()
-
-                # Print results
-                for c in det[:, -1].unique():
-                    n = (det[:, -1] == c).sum()  # detections per class
-                    s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
-
-                xywhs = xyxy2xywh(det[:, 0:4])
-                # Write results
-                #for *xyxy, conf, cls in det:
-                #    xywhs_norma = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
-                #print(f"yolo co-ord : {xywhs}")
-                confs = det[:, 4]
-                clss = det[:, 5]
-
-                # pass detections to strongsort
-                t4 = time_sync()
-                outputs[i] = strongsort_list[i].update(xywhs.cpu(), confs.cpu(), clss.cpu(), im0)
-                t5 = time_sync()
-                dt[3] += t5 - t4
-
-                # draw boxes for visualization
-                if len(outputs[i]) > 0:
-                    for j, (output, conf) in enumerate(zip(outputs[i], confs)):
     
-                        bboxes = output[0:4]
-                        #print(f"yolo deepsort co-ord : {bboxes}")
-                        id = output[4]
-                        cls = output[5]
-
-                        if save_txt:
-                            # to MOT format
-                            bbox_left = output[0]
-                            bbox_top = output[1]
-                            bbox_w = output[2] - output[0]
-                            bbox_h = output[3] - output[1]
-                            # Write MOT compliant results to file
-                            with open(txt_path + '.txt', 'a') as f:
-                                f.write(('%g ' * 10 + '\n') % (frame_idx + 1, id, bbox_left,  # MOT format
-                                                               bbox_top, bbox_w, bbox_h, -1, -1, -1, i))
-
-                        if save_vid or save_crop or show_vid:  # Add bbox to image
-                            c = int(cls)  # integer class
-                            id = int(id)  # integer id
-                            roi = [polygon_roi[0][0], polygon_roi[0][1],\
+    # Dataloader
+    #TODO 
+    '''
+    Intialilze API Layer
+    '''
+    NODENAME = "tyre_counting"
+    if RUN_MODE:
+        apil = ExtApiLayer(name=NODENAME, port=5011, max_hung_time=5,\
+            log_level=10) #objYaml.values["debugLevel"])
+        apil.run()
+        #Running infinite loop for input
+        count = 0
+        while(True):
+            print("inside loop main()")
+            if RESPONSE_SENT and RUN_MODE:
+                time.sleep(.001)
+                continue
+            #if RUN_MODE:
+            #print("not (MD and IMG_STRING_TUPLES) and RUN_MODE: "+str(not (MD and IMG_STRING_TUPLES) and RUN_MODE))
+            print(f"IMG_STRING_TUPLES: {IMG_STRING_TUPLES}")
+            print(f"MD: {MD}")
+            while not (MD and IMG_STRING_TUPLES) and RUN_MODE:
+                print(f"IMG_STRING_TUPLES: {IMG_STRING_TUPLES}")
+                print(f"MD: {MD}")
+                print("not (MD and IMG_STRING_TUPLES) and RUN_MODE: "+str(not (MD and IMG_STRING_TUPLES) and RUN_MODE))
+                LOGGER.info("Waiting for API request going to sleep for 1 sec.")
+                time.sleep(1)
+            print('Receive Status from API for')
+            input_json = MD
+            img_list_tuples = IMG_STRING_TUPLES
+            start = int(time.time() * 1000)
+            #TODO 
+            '''
+            Decode base64 image ndarray
+            '''
+            temp_start1 = time.time()*1000
+            image_string = img_list_tuples[0]["image_string"]
+            print("Length of image "+str(i+1)+": "+str(len(image_string)))
+            jpg_original = base64.b64decode(image_string.encode("utf-8"))
+            jpg_as_np = np.frombuffer(jpg_original, dtype=np.uint8)
+            img_matlab = cv2.imdecode(jpg_as_np, flags=1)
+            roi = [polygon_roi[0][0], polygon_roi[0][1],\
                                                  polygon_roi[2][0], polygon_roi[2][1]]
-                            #iou_conf = iou_check(bboxes, roi)
-                            label = None if hide_labels else (f'{id} {names[c]}' if hide_conf else \
-                                (f'{id} {conf:.2f}' if hide_class else f'{id} {names[c]} {conf:.2f}'))
-                            #iou_conf = iou_check(bboxes, roi)
-                            #print(f"iou_conf: {iou_conf}")
-                            if True: #iou_conf > 0.1:
-                                tyre_id = f'{id:0.0f}'
-                                if tyre_id not in unique_tyre_centroid:
-                                    unique_tyre_centroid = {}
-                                    unique_tyre_centroid[tyre_id] = {"trail-path": [], "isLoaded": False}
-                                centroid = int(bboxes[0]) , int((bboxes[1] + bboxes[3])// 2)
-                                unique_tyre_centroid[tyre_id]["trail-path"].append(centroid)
-                                for point in unique_tyre_centroid[tyre_id]["trail-path"]:
-                                    print(f"point: {point}")
-                                    annotator.im = cv2.circle(annotator.im, point, 5, (255,0,255), thickness=3)
-                                #TODO Line Crossing Logic
-                                '''
-                                If mid poit of tyre's TOP-LEFT and BOTTOM-LEFT cross the drawn line then We can say tyre is 
-                                loaded.
-                                '''
-                                #TODO 
-                                '''
-                                For Futur, We will implement
-                                ENTRY and EXIT Logic 
-                                '''
-                                '''
-                                Equation of line
-                                A(X1, Y1), B(X2, Y2)
-                                '''
-                                if not unique_tyre_centroid[tyre_id]["isLoaded"]:
-                                    (X1,Y1), (X2,Y2) = line[0], line[1]
-                                    PX,PY = centroid
-                                    Z = PX*(Y2-Y1)-PY*(X2-X1)-X1*(Y2-Y1)+Y1*(X2-X1)
-                                    if Z <= 0:
-                                        #Centroid is on or left side of line, means Tyre is loaded
-                                        unique_tyre_centroid[tyre_id]["isLoaded"] = True
-                                annotator.box_label(bboxes, 1.0,unique_tyre_centroid[tyre_id]["isLoaded"], label, color=colors(c, True))
-                            if save_crop:
-                                txt_file_name = txt_file_name if (isinstance(path, list) and len(path) > 1) else ''
-                                save_one_box(bboxes, imc, file=save_dir / 'crops' / txt_file_name / names[c] / f'{id}' / f'{p.stem}.jpg', BGR=True)
+            #TODO
+            '''
+            performing yolo inference and tracking
+            '''
+            im0 = process_frame(img_matlab, stride, nr_sources, model, device, half, model_version,visualize,\
+                          roi, pt, conf_thres, iou_thres, classes,agnostic_nms, cfg, \
+                          strongsort_list, save_vid, save_crop, save_txt, show_vid, max_det=max_det, img_size=640)
+            cv2.imwrite(f"/temp_API/debug_frame_{count}", im0)
+            MD["receiver"] = MD['sender']+ " world!!"
+            input_json = MD
+            send_json = json.dumps(input_json)
+            MD =None
+            IMG_STRING_TUPLES = None
+            RESPONSE = send_json
+            count += 1
+    else:
+        vid_path, vid_writer, txt_path = [None] * nr_sources, [None] * nr_sources, [None] * nr_sources
 
-                LOGGER.info(f'{s}Done. YOLO:({t3 - t2:.3f}s), StrongSORT:({t5 - t4:.3f}s)')
+        outputs = [None] * nr_sources
+        unique_tyre_centroid = {}
+        # Run tracking
+        if model_version=="yolov5":
+            model.warmup(imgsz=(1 if pt else nr_sources, 3, *imgsz))  # warmup
+        #else:
+        #    im = torch.zeros(*imgsz, dtype=torch.half if self.fp16 else torch.float, device=device)  # input
+        #    model.forward(im)
+        dt, seen = [0.0, 0.0, 0.0, 0.0], 0
+        curr_frames, prev_frames = [None] * nr_sources, [None] * nr_sources
+        print(f"nr_sources: {nr_sources}, curr_frames: {curr_frames} and prev_frames: {prev_frames}")
+        for frame_idx, (path, im, im0s, vid_cap, s) in enumerate(dataset):
+            print(f"s: {s}")
+            print(f"im shape: {len(im)}")
+            print(f"im0 shape: {len(im0s)}")
+            t1 = time_sync()
+            im = torch.from_numpy(im).to(device)
+            im = im.half() if half else im.float()  # uint8 to fp16/32
+            im /= 255.0  # 0 - 255 to 0.0 - 1.0
+            if len(im.shape) == 3:
+                im = im[None]  # expand for batch dim
+            t2 = time_sync()
+            dt[0] += t2 - t1
 
+            # Inference
+            visualize = increment_path(save_dir / Path(path[0]).stem, mkdir=True) if visualize else False
+            if model_version=="yolov5":
+                pred = model(im, augment=augment, visualize=visualize)
             else:
-                strongsort_list[i].increment_ages()
-                LOGGER.info('No detections')
+                pred = model(im, augment=augment)
+            t3 = time_sync()
+            dt[1] += t3 - t2
 
-            # Stream results
-            im0 = annotator.result()
-            if show_vid:
-                cv2.imshow(str(p), im0)
-                cv2.waitKey(1)  # 1 millisecond
+            # Apply NMS
+            if model_version=="yolov5":
+                pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
+            else:
+                pred = non_max_suppressionV4(pred, conf_thres, iou_thres, classes, agnostic_nms)
+            dt[2] += time_sync() - t3
 
-            # Save results (image with detections)
-            if save_vid:
-                if vid_path[i] != save_path:  # new video
-                    vid_path[i] = save_path
-                    if isinstance(vid_writer[i], cv2.VideoWriter):
-                        vid_writer[i].release()  # release previous video writer
-                    if vid_cap:  # video
-                        fps = int(fps) #vid_cap.get(cv2.CAP_PROP_FPS)
-                        w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                        h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                    else:  # stream
-                        fps, w, h = 30, im0.shape[1], im0.shape[0]
-                    save_path = str(Path(save_path).with_suffix('.mp4'))  # force *.mp4 suffix on results videos
-                    vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
-                vid_writer[i].write(im0)
+            # Process detections
+            for i, det in enumerate(pred):  # detections per image
+                seen += 1
+                if webcam:  # nr_sources >= 1
+                    p, im0, _ = path[i], im0s[i].copy(), dataset.count
+                    p = Path(p)  # to Path
+                    s += f'{i}: '
+                    txt_file_name = p.name
+                    save_path = str(save_dir / p.name)  # im.jpg, vid.mp4, ...
+                else:
+                    p, im0, _ = path, im0s.copy(), getattr(dataset, 'frame', 0)
+                    p = Path(p)  # to Path
+                    # video file
+                    if source.endswith(VID_FORMATS):
+                        txt_file_name = p.stem
+                        save_path = str(save_dir / p.name)  # im.jpg, vid.mp4, ...
+                    # folder with imgs
+                    else:
+                        txt_file_name = p.parent.name  # get folder name containing current img
+                        save_path = str(save_dir / p.parent.name)  # im.jpg, vid.mp4, ...
+                print(f"i: {i}")
+                curr_frames[i] = im0
 
-            prev_frames[i] = curr_frames[i]
+                txt_path = str(save_dir / 'tracks' / txt_file_name)  # im.txt
+                s += '%gx%g ' % im.shape[2:]  # print string
+                gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
+                imc = im0.copy() if save_crop else im0  # for save_crop
+                #im0 = cv2.rectangle(im0, (roi[0], roi[1]), (roi[2], roi[3]), (0, 0, 255), 2)
+                pts = np.array(polygon_roi,np.int32)
+                pts = pts.reshape((-1, 1, 2))
+                isClosed = True
+                color = (0, 255, 0)
+                thickness = 2
+                im0 = cv2.polylines(im0, [pts],
+                          isClosed, color, thickness)
+                im0 = cv2.line(im0, line[0],line[1], (255,0,0), thickness)
+                annotator = Annotator(im0, line_width=2, pil=not ascii)
+                if cfg.STRONGSORT.ECC:  # camera motion compensation
+                    strongsort_list[i].tracker.camera_update(prev_frames[i], curr_frames[i])
 
-    # Print results
-    t = tuple(x / seen * 1E3 for x in dt)  # speeds per image
-    LOGGER.info(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS, %.1fms strong sort update per image at shape {(1, 3, *imgsz)}' % t)
-    if save_txt or save_vid:
-        s = f"\n{len(list(save_dir.glob('tracks/*.txt')))} tracks saved to {save_dir / 'tracks'}" if save_txt else ''
-        LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}{s}")
-    if update:
-        strip_optimizer(yolo_weights)  # update model (to fix SourceChangeWarning)
+                if det is not None and len(det):
+                    # Rescale boxes from img_size to im0 size
+                    det[:, :4] = scale_coords(im.shape[2:], det[:, :4], im0.shape).round()
+
+                    # Print results
+                    for c in det[:, -1].unique():
+                        n = (det[:, -1] == c).sum()  # detections per class
+                        s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
+
+                    xywhs = xyxy2xywh(det[:, 0:4])
+                    # Write results
+                    #for *xyxy, conf, cls in det:
+                    #    xywhs_norma = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+                    #print(f"yolo co-ord : {xywhs}")
+                    confs = det[:, 4]
+                    clss = det[:, 5]
+
+                    # pass detections to strongsort
+                    t4 = time_sync()
+                    outputs[i] = strongsort_list[i].update(xywhs.cpu(), confs.cpu(), clss.cpu(), im0)
+                    t5 = time_sync()
+                    dt[3] += t5 - t4
+
+                    # draw boxes for visualization
+                    if len(outputs[i]) > 0:
+                        for j, (output, conf) in enumerate(zip(outputs[i], confs)):
+        
+                            bboxes = output[0:4]
+                            #print(f"yolo deepsort co-ord : {bboxes}")
+                            id = output[4]
+                            cls = output[5]
+
+                            if save_txt:
+                                # to MOT format
+                                bbox_left = output[0]
+                                bbox_top = output[1]
+                                bbox_w = output[2] - output[0]
+                                bbox_h = output[3] - output[1]
+                                # Write MOT compliant results to file
+                                with open(txt_path + '.txt', 'a') as f:
+                                    f.write(('%g ' * 10 + '\n') % (frame_idx + 1, id, bbox_left,  # MOT format
+                                                                   bbox_top, bbox_w, bbox_h, -1, -1, -1, i))
+
+                            if save_vid or save_crop or show_vid:  # Add bbox to image
+                                c = int(cls)  # integer class
+                                id = int(id)  # integer id
+                                roi = [polygon_roi[0][0], polygon_roi[0][1],\
+                                                     polygon_roi[2][0], polygon_roi[2][1]]
+                                #iou_conf = iou_check(bboxes, roi)
+                                label = None if hide_labels else (f'{id} {names[c]}' if hide_conf else \
+                                    (f'{id} {conf:.2f}' if hide_class else f'{id} {names[c]} {conf:.2f}'))
+                                #iou_conf = iou_check(bboxes, roi)
+                                #print(f"iou_conf: {iou_conf}")
+                                if True: #iou_conf > 0.1:
+                                    tyre_id = f'{id:0.0f}'
+                                    if tyre_id not in unique_tyre_centroid:
+                                        unique_tyre_centroid = {}
+                                        unique_tyre_centroid[tyre_id] = {"trail-path": [], "isLoaded": False}
+                                    centroid = int(bboxes[0]) , int((bboxes[1] + bboxes[3])// 2)
+                                    unique_tyre_centroid[tyre_id]["trail-path"].append(centroid)
+                                    for point in unique_tyre_centroid[tyre_id]["trail-path"]:
+                                        print(f"point: {point}")
+                                        annotator.im = cv2.circle(annotator.im, point, 5, (255,0,255), thickness=3)
+                                    #TODO Line Crossing Logic
+                                    '''
+                                    If mid poit of tyre's TOP-LEFT and BOTTOM-LEFT cross the drawn line then We can say tyre is 
+                                    loaded.
+                                    '''
+                                    #TODO 
+                                    '''
+                                    For Futur, We will implement
+                                    ENTRY and EXIT Logic 
+                                    '''
+                                    '''
+                                    Equation of line
+                                    A(X1, Y1), B(X2, Y2)
+                                    '''
+                                    if not unique_tyre_centroid[tyre_id]["isLoaded"]:
+                                        (X1,Y1), (X2,Y2) = line[0], line[1]
+                                        PX,PY = centroid
+                                        Z = PX*(Y2-Y1)-PY*(X2-X1)-X1*(Y2-Y1)+Y1*(X2-X1)
+                                        if Z <= 0:
+                                            #Centroid is on or left side of line, means Tyre is loaded
+                                            unique_tyre_centroid[tyre_id]["isLoaded"] = True
+                                    annotator.box_label(bboxes, 1.0,unique_tyre_centroid[tyre_id]["isLoaded"], label, color=colors(c, True))
+                                if save_crop:
+                                    txt_file_name = txt_file_name if (isinstance(path, list) and len(path) > 1) else ''
+                                    save_one_box(bboxes, imc, file=save_dir / 'crops' / txt_file_name / names[c] / f'{id}' / f'{p.stem}.jpg', BGR=True)
+
+                    LOGGER.info(f'{s}Done. YOLO:({t3 - t2:.3f}s), StrongSORT:({t5 - t4:.3f}s)')
+
+                else:
+                    strongsort_list[i].increment_ages()
+                    LOGGER.info('No detections')
+
+                # Stream results
+                im0 = annotator.result()
+                if show_vid:
+                    cv2.imshow(str(p), im0)
+                    cv2.waitKey(1)  # 1 millisecond
+
+                # Save results (image with detections)
+                if save_vid:
+                    if vid_path[i] != save_path:  # new video
+                        vid_path[i] = save_path
+                        if isinstance(vid_writer[i], cv2.VideoWriter):
+                            vid_writer[i].release()  # release previous video writer
+                        if vid_cap:  # video
+                            fps = int(fps) #vid_cap.get(cv2.CAP_PROP_FPS)
+                            w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                            h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                        else:  # stream
+                            fps, w, h = 30, im0.shape[1], im0.shape[0]
+                        save_path = str(Path(save_path).with_suffix('.mp4'))  # force *.mp4 suffix on results videos
+                        vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+                    vid_writer[i].write(im0)
+
+                prev_frames[i] = curr_frames[i]
+
+        # Print results
+        t = tuple(x / seen * 1E3 for x in dt)  # speeds per image
+        LOGGER.info(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS, %.1fms strong sort update per image at shape {(1, 3, *imgsz)}' % t)
+        if save_txt or save_vid:
+            s = f"\n{len(list(save_dir.glob('tracks/*.txt')))} tracks saved to {save_dir / 'tracks'}" if save_txt else ''
+            LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}{s}")
+        if update:
+            strip_optimizer(yolo_weights)  # update model (to fix SourceChangeWarning)
 
 
 def parse_opt():
@@ -486,6 +775,10 @@ def main(opt):
 
 
 if __name__ == "__main__":
+    MD = None
+    IMG_STRING_TUPLES = None
+    RESPONSE = None
+    RESPONSE_SENT = False
     parser = argparse.ArgumentParser()
     parser.add_argument(
         '-externalconfig', help='External config file path')
