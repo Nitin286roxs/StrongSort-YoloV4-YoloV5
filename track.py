@@ -507,7 +507,9 @@ def run(objyaml):
             im0 = process_frame(img_matlab, stride, nr_sources, model, device, half, model_version,visualize,\
                           roi, pt, conf_thres, iou_thres, classes,agnostic_nms, cfg, \
                           strongsort_list, save_vid, save_crop, save_txt, show_vid, max_det=max_det, img_size=640)
-            cv2.imwrite(f"/temp_API/debug_frame_{count}", im0)
+            frame_name = f"/WS/frame_dumps/debug_frame_{count}.jpg"
+            cv2.imwrite(frame_name, im0)
+            print(f"{frame_name} exists: {os.path.isfile(frame_name)}")
             MD["receiver"] = MD['sender']+ " world!!"
             input_json = MD
             send_json = json.dumps(input_json)
