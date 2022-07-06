@@ -20,9 +20,10 @@ while(1):
         print("Frame is empty")
         break;
     else:
-        #cv2.imshow('VIDEO', IMG)
-        #cv2.waitKey(1)
+        s_time = time.time()*1000
         IMAGE_STRING = base64.b64encode(cv2.imencode('.bmp', IMG)[1]).decode("utf-8")
+        e_time = time.time()*1000
+        print(f"Time taken to encode image: {e_time - s_time}")
         print("Sending request {}".format(request))
         MD = {"metadata": {"sender": "Hello "}, "images": [{"image_string": IMAGE_STRING, "len": len(IMAGE_STRING)}]}
         #response = requests.post('https://10.16.239.1:5011/ovc_input', json=MD)
@@ -33,8 +34,17 @@ while(1):
         END = time.time()*1000
         print("time taken for request ", request, ": ", END-START, " msec.")
         print(response.status_code)
-        result_json = json.loads(response.content.decode('utf-8'))
-        print(result_json)
+        result_json = json.loads(response.content.decode('utf-8')) #{"image_string": img_str, "Receiver_data": MD}
+        print(result_json["Receiver_data"])
+        img_str = result_json['image_string']
+        s_time = time.time()*1000
+        jpg_original = base64.b64decode(img_str.encode("utf-8"))
+        jpg_as_np = np.frombuffer(jpg_original, dtype=np.uint8)
+        img_matlab = cv2.imdecode(jpg_as_np, flags=1)
+        e_time = time.time()*1000
+        print(f"Time taken to decode image: {e_time - s_time}")
+        cv2.imshow('VIDEO', img_matlab)
+        cv2.waitKey(1)
         #file_.write(IMGPATH + str(result_json["moduleData"]["imageList"][0]["inference"])+"\n")
         print("Send completed")
         request += 1

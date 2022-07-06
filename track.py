@@ -1,10 +1,13 @@
-#polygon_roi = [[510,345], [1295,370], [1465,915], [480,940]]
+#ROI For tyre counting
 polygon_roi = [[405,220], [1075,237], [1220,915], [275,920]]
 line = [(630,360), (600,950)]
-#roi = [380, 360, 1296,925]
+#ROI for Bilboard
+#polygon_roi = [[750,425], [1295,425], [1475,1290], [500,1290]]
+#polygon_roi = [[770,330],[1705,330],[1705, 1290], [770, 1290]]
+MODEL_MEAN_VALUES = (78.4263377603, 87.7689143744, 114.895847746)
+genderList = ['Male', 'Female']
 
 import argparse
-
 import os
 # limit the number of cpus used by high performance libraries
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -16,6 +19,7 @@ try:
     RUN_MODE = int(os.environ["RUN_MODE"])
 except KeyError:
     RUN_MODE = 1
+
 import sys
 import base64
 import threading
@@ -60,6 +64,29 @@ logging.getLogger().removeHandler(logging.getLogger().handlers[0])
 
 LOCK = threading.Lock()
 
+genderNet = None
+eyes_cascade = None
+USECASE = (os.environ["USECASE"])
+if USECASE=="Billboard":
+    #Gender model
+    genderProto = "gender_model/gender_deploy.prototxt"
+    genderModel = "gender_model/gender_net.caffemodel"
+    print(f"{genderProto} exists :{os.path.isfile(genderProto)}")
+    print(f"{genderModel} exists :{os.path.isfile(genderModel)}")
+    #Eye Cascade Model
+    eyes_cascade_name = "eye_detection_model/haarcascade_eye_tree_eyeglasses.xml"
+    print(f"{eyes_cascade_name} exists :{os.path.isfile(eyes_cascade_name)}")
+    eyes_cascade = cv2.CascadeClassifier()
+    #-- 1. Load the cascades
+    if not eyes_cascade.load(cv2.samples.findFile(eyes_cascade_name)):
+        print('--(!)Error loading eyes cascade')
+        exit(0)
+
+    #Lodd network
+    genderNet = cv2.dnn.readNet(genderModel, genderProto)
+    print(f"genderNet: {genderNet}")
+
+
 @add_method(ExtApiLayer)
 def process_input(md, img_string_tuples):
     global MD, IMG_STRING_TUPLES, RESPONSE, RESPONSE_SENT
@@ -78,6 +105,26 @@ def process_input(md, img_string_tuples):
     COPY_RESPONSE = RESPONSE
     LOCK.release()
     return COPY_RESPONSE 
+def automate_histogram_mid(mean):
+    # For Darker Image
+    if mean < 75:
+        mid = random.choice([0.5, 0.6, 0.7])
+    # For Average Lighting Image
+    elif mean >= 75 and mean <= 130:
+        mid = random.choice([.2,.3,.4, 0.5, 0.6, 0.7])
+    # For Brighter Image
+    else:
+        mid = random.choice([0.2, 0.3, 0.4,.5])
+    return mid
+
+def adjust_gamma(image, gamma=1.0):
+    # build a lookup table mapping the pixel values [0, 255] to
+    # their adjusted gamma values
+    lookUpTable = np.empty((1,256), np.uint8)
+    for i in range(256):
+        lookUpTable[0,i] = np.clip(pow(i / 255.0, gamma) * 255.0, 0, 255)
+    # apply gamma correction using the lookup table
+    return cv2.LUT(image, lookUpTable)
 
 #Intersection over union check for two objects
 def iou_check(boxA, boxB):
@@ -160,13 +207,15 @@ def letterbox_V4(img, new_shape=(640, 640), color=(114, 114, 114), auto=True, sc
     img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)  # add border
     return img, ratio, (dw, dh)
 
-def process_frame(im0, stride, nr_sources, model, device, half, model_version, visualize, roi, pt,\
-                  conf_thres, iou_thres, classes, agnostic_nms, cfg, strongsort_list,\
-                  save_vid, save_crop, save_txt, show_vid, max_det, img_size=640):
+unique_tyre_centroid = {} 
+def process_frame(im0, stride, nr_sources, USECASE,  model, names, device, half,\
+                  model_version, visualize, roi, pt, conf_thres, iou_thres, classes, agnostic_nms,\
+                  cfg, strongsort_list, save_vid, save_crop, save_txt, show_vid, max_det, img_size=640):
     #TODO
     '''
     Cropping the ROI part from image dataset for inference to improve tracking
     '''
+    global unique_tyre_centroid
     assert im0 is not None, 'Image Not Found ' + path
     background = np.full((im0.shape[0], im0.shape[1], 3) , (114,114,114), np.uint8)
     overlay = im0[roi[1]:roi[3], roi[0]:roi[2]]
@@ -174,7 +223,11 @@ def process_frame(im0, stride, nr_sources, model, device, half, model_version, v
     auto_size=64
     dt, seen = [0.0, 0.0, 0.0, 0.0], 0
     curr_frames, prev_frames = [None] * nr_sources, [None] * nr_sources
+    outputs = [None] * nr_sources
     augment = False
+    hide_labels = False
+    hide_conf = False
+    hide_class = False
     # Padded resize
     if model_version == "yoloV5":
         im = letterbox_V5(background, img_size, stride=stride, auto=pt)[0]
@@ -213,25 +266,9 @@ def process_frame(im0, stride, nr_sources, model, device, half, model_version, v
     dt[2] += time_sync() - t3
 
     # Process detections
+    count = 0
     for i, det in enumerate(pred):  # detections per image
         seen += 1
-        #if webcam:  # nr_sources >= 1
-        #    p, im0, _ = path[i], im0s[i].copy(), dataset.count
-        #    p = Path(p)  # to Path
-        #    s += f'{i}: '
-        #    txt_file_name = p.name
-        #    save_path = str(save_dir / p.name)  # im.jpg, vid.mp4, ...
-        #else:
-        #    p, im0, _ = path, im0s.copy(), getattr(dataset, 'frame', 0)
-        #    p = Path(p)  # to Path
-        #    # video file
-        #    if source.endswith(VID_FORMATS):
-        #        txt_file_name = p.stem
-        #        save_path = str(save_dir / p.name)  # im.jpg, vid.mp4, ...
-        #    # folder with imgs
-        #    else:
-        #        txt_file_name = p.parent.name  # get folder name containing current img
-        #        save_path = str(save_dir / p.parent.name)  # im.jpg, vid.mp4, ...
         print(f"i: {i}")
         curr_frames[i] = im0
 
@@ -241,6 +278,13 @@ def process_frame(im0, stride, nr_sources, model, device, half, model_version, v
         imc = im0.copy() if save_crop else im0  # for save_crop
         #im0 = cv2.rectangle(im0, (roi[0], roi[1]), (roi[2], roi[3]), (0, 0, 255), 2)
         pts = np.array(polygon_roi,np.int32)
+        isEyeDetection = None
+        isGenderClassification = None
+        isEyeVisible = None
+        if USECASE == "Billboard":
+            isEyeDetection = True
+            isGenderClassification = True
+            isEyeVisible = False
         pts = pts.reshape((-1, 1, 2))
         isClosed = True
         color = (0, 255, 0)
@@ -248,7 +292,9 @@ def process_frame(im0, stride, nr_sources, model, device, half, model_version, v
         im0 = cv2.polylines(im0, [pts],
                   isClosed, color, thickness)
         im0 = cv2.line(im0, line[0],line[1], (255,0,0), thickness)
-        annotator = Annotator(im0, line_width=2, pil=not ascii)
+        annotator = Annotator(im0, isEyeDetection, isGenderClassification, line_width=2, pil=not ascii)
+        if prev_frames[i] is None:
+            prev_frames[i] = curr_frames[i].copy()
         if cfg.STRONGSORT.ECC:  # camera motion compensation
             strongsort_list[i].tracker.camera_update(prev_frames[i], curr_frames[i])
 
@@ -259,7 +305,7 @@ def process_frame(im0, stride, nr_sources, model, device, half, model_version, v
             # Print results
             for c in det[:, -1].unique():
                 n = (det[:, -1] == c).sum()  # detections per class
-                s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
+                #s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
 
             xywhs = xyxy2xywh(det[:, 0:4])
             # Write results
@@ -283,7 +329,49 @@ def process_frame(im0, stride, nr_sources, model, device, half, model_version, v
                     #print(f"yolo deepsort co-ord : {bboxes}")
                     id = output[4]
                     cls = output[5]
-
+                    if isEyeDetection and isGenderClassification:
+                        face = im0[int(max(0,bboxes[1])):int(min(bboxes[3],im0.shape[0]-1)),int(max(0,bboxes[0])):int(min(bboxes[2], im0.shape[1]-1))]
+                        #TODO 
+                        '''
+                        Applying gamma correction on face.
+                        '''
+                        count += 1
+                        face_temp_gray = cv2.cvtColor(face, cv2.COLOR_BGR2GRAY)
+                        mean = np.mean(face_temp_gray)
+                        mid = automate_histogram_mid(mean)
+                        gamma = math.log(mid)/math.log(mean/255)
+                        # do gamma correction
+                        face_gamma = adjust_gamma(face, gamma)
+                        #print(face.shape)
+                        blob = cv2.dnn.blobFromImage(face, 1.0, (227, 227), MODEL_MEAN_VALUES, swapRB=False)
+                        genderNet.setInput(blob)
+                        genderPreds = genderNet.forward()
+                        gender = genderList[genderPreds[0].argmax()]
+                        genderConf = genderPreds[0].max()
+                        #Adding grayscaled face patch to original image
+                        img0_gamma = im0.copy()
+                        img0_gamma[int(max(0,bboxes[1])):int(min(bboxes[3],im0.shape[0]-1)),int(max(0,bboxes[0])):int(min(bboxes[2], im0.shape[1]-1))] = face_gamma
+                        frame_gray = cv2.cvtColor(img0_gamma, cv2.COLOR_BGR2GRAY)
+                        frame_gray = cv2.equalizeHist(frame_gray)
+                        faceROI = frame_gray[int(max(0,bboxes[1])):int(min(bboxes[3],im0.shape[0]-1)),int(max(0,bboxes[0])):int(min(bboxes[2], im0.shape[1]-1))]
+                        #if True:#dump_gamma_corrected:
+                        #    cv2.imwrite(f"/WS/gamma_corrected/{count}.jpg", face)
+                        #    cv2.imwrite(f"/WS/gamma_corrected/{count}_greyscale.jpg", face_temp_gray)
+                        #    cv2.imwrite(f"/WS/gamma_corrected/{count}_gamma.jpg", face_gamma)
+                        #    cv2.imwrite(f"/WS/gamma_corrected/{count}_org_full.jpg", im0)
+                        #    cv2.imwrite(f"/WS/gamma_corrected/{count}_gamma_full.jpg", img0_gamma)
+                        eyes = eyes_cascade.detectMultiScale(faceROI,1.3, 5)
+                        #print(f"eyes: {eyes}")
+                        if len(eyes):
+                            is_eye_visible = True
+                        else:
+                            is_eye_visible = False
+                        for (x2,y2,w2,h2) in eyes:
+                            eye_center = (int(bboxes[0] + x2 + w2//2), int(bboxes[1] + y2 + h2//2))
+                            radius = int(round((w2 + h2)*0.25))
+                            #print(f"eye_center: {eye_center}")
+                            #print(f"eyes radius: {radius}")
+                            im0 = cv2.circle(im0, eye_center, radius, (255, 255, 0 ), 4)
                     if save_txt:
                         # to MOT format
                         bbox_left = output[0]
@@ -303,45 +391,48 @@ def process_frame(im0, stride, nr_sources, model, device, half, model_version, v
                         #iou_conf = iou_check(bboxes, roi)
                         label = None if hide_labels else (f'{id} {names[c]}' if hide_conf else \
                             (f'{id} {conf:.2f}' if hide_class else f'{id} {names[c]} {conf:.2f}'))
-                        #iou_conf = iou_check(bboxes, roi)
+                        iou_conf = iou_check(bboxes, roi)
                         #print(f"iou_conf: {iou_conf}")
-                        if True: #iou_conf > 0.1:
-                            tyre_id = f'{id:0.0f}'
-                            if tyre_id not in unique_tyre_centroid:
-                                unique_tyre_centroid = {}
-                                unique_tyre_centroid[tyre_id] = {"trail-path": [], "isLoaded": False}
-                            centroid = int(bboxes[0]) , int((bboxes[1] + bboxes[3])// 2)
-                            unique_tyre_centroid[tyre_id]["trail-path"].append(centroid)
-                            for point in unique_tyre_centroid[tyre_id]["trail-path"]:
-                                print(f"point: {point}")
-                                annotator.im = cv2.circle(annotator.im, point, 5, (255,0,255), thickness=3)
-                            #TODO Line Crossing Logic
-                            '''
-                            If mid poit of tyre's TOP-LEFT and BOTTOM-LEFT cross the drawn line then We can say tyre is 
-                            loaded.
-                            '''
-                            #TODO 
-                            '''
-                            For Futur, We will implement
-                            ENTRY and EXIT Logic 
-                            '''
-                            '''
-                            Equation of line
-                            A(X1, Y1), B(X2, Y2)
-                            '''
-                            if not unique_tyre_centroid[tyre_id]["isLoaded"]:
-                                (X1,Y1), (X2,Y2) = line[0], line[1]
-                                PX,PY = centroid
-                                Z = PX*(Y2-Y1)-PY*(X2-X1)-X1*(Y2-Y1)+Y1*(X2-X1)
-                                if Z <= 0:
-                                    #Centroid is on or left side of line, means Tyre is loaded
-                                    unique_tyre_centroid[tyre_id]["isLoaded"] = True
-                            annotator.box_label(bboxes, 1.0,unique_tyre_centroid[tyre_id]["isLoaded"], label, color=colors(c, True))
+                        if iou_conf > 0.5:
+                            if USECASE == "Billboard":
+                                annotator.box_label_billboard(bboxes, gender, genderConf, is_eye_visible, label, color=colors(c, True))
+                            if USECASE == "TyreCounting":
+                                tyre_id = f'{id:0.0f}'
+                                if tyre_id not in unique_tyre_centroid:
+                                    unique_tyre_centroid = {}
+                                    unique_tyre_centroid[tyre_id] = {"trail-path": [], "isLoaded": False}
+                                centroid = int(bboxes[0]) , int((bboxes[1] + bboxes[3])// 2)
+                                unique_tyre_centroid[tyre_id]["trail-path"].append(centroid)
+                                for point in unique_tyre_centroid[tyre_id]["trail-path"]:
+                                    print(f"point: {point}")
+                                    annotator.im = cv2.circle(annotator.im, point, 5, (255,0,255), thickness=3)
+                                #TODO Line Crossing Logic
+                                '''
+                                If mid poit of tyre's TOP-LEFT and BOTTOM-LEFT cross the drawn line then We can say tyre is 
+                                loaded.
+                                '''
+                                #TODO 
+                                '''
+                                For Futur, We will implement
+                                ENTRY and EXIT Logic 
+                                '''
+                                '''
+                                Equation of line
+                                A(X1, Y1), B(X2, Y2)
+                                '''
+                                if not unique_tyre_centroid[tyre_id]["isLoaded"]:
+                                    (X1,Y1), (X2,Y2) = line[0], line[1]
+                                    PX,PY = centroid
+                                    Z = PX*(Y2-Y1)-PY*(X2-X1)-X1*(Y2-Y1)+Y1*(X2-X1)
+                                    if Z <= 0:
+                                        #Centroid is on or left side of line, means Tyre is loaded
+                                        unique_tyre_centroid[tyre_id]["isLoaded"] = True
+                                annotator.box_label_tyrecounting(bboxes, 1.0,unique_tyre_centroid[tyre_id]["isLoaded"], label, color=colors(c, True))
                         if save_crop:
                             txt_file_name = txt_file_name if (isinstance(path, list) and len(path) > 1) else ''
                             save_one_box(bboxes, imc, file=save_dir / 'crops' / txt_file_name / names[c] / f'{id}' / f'{p.stem}.jpg', BGR=True)
 
-            LOGGER.info(f'{s}Done. YOLO:({t3 - t2:.3f}s), StrongSORT:({t5 - t4:.3f}s)')
+            LOGGER.info(f'Inference Done. YOLO:({t3 - t2:.3f}s), StrongSORT:({t5 - t4:.3f}s)')
 
         else:
             strongsort_list[i].increment_ages()
@@ -367,7 +458,10 @@ def run(objyaml):
     save_crop = False  # save cropped prediction boxes
     save_vid = objyaml.save_vid  # save confidences in --save-txt labels
     nosave = False  # do not save images/videos
-    classes = None  # filter by class: --class 0, or --class 0 2 3
+    if USECASE=="Billboard":
+        classes = 1  # head class
+    else:
+        classes = None  # filter by class: --class 0, or --class 0 2 3
     agnostic_nms = False,  # class-agnostic NMS
     augment = False  # augmented inference
     visualize = False  # visualize features
@@ -385,6 +479,7 @@ def run(objyaml):
     model_version = objyaml.model_version #yolo model-type yolov4 or v5
     cfg = objyaml.cfg #Original cfg file if model type is yolov4
     fps = objyaml.fps #Input framesrate
+    #usecase = objyaml.usecase #POC UseCase
     #source = str(objyaml.source)
     save_img = not nosave and not source.endswith('.txt')  # save inference images
     is_file = Path(source).suffix[1:] in (VID_FORMATS)
@@ -415,6 +510,14 @@ def run(objyaml):
         stride, names, pt = model.stride, model.names, model.pt
         imgsz = check_img_size(imgsz, s=stride)  # check image size
         print(f"model_Stride: {stride}, model_name: {names} and model_pt: {pt}")
+        if USECASE == "Billboard":
+            if(device.type == 'cpu'):
+                genderNet.setPreferableBackend(cv2.dnn.DNN_TARGET_CPU)
+                print('Using CPU device.')
+            elif(device.type == 'gpu'):
+                genderNet.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
+                genderNet.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
+                print('Using GPU device.')
     else:
         model = Darknet(cfg, imgsz).cuda()
         try:
@@ -468,7 +571,7 @@ def run(objyaml):
             log_level=10) #objYaml.values["debugLevel"])
         apil.run()
         #Running infinite loop for input
-        count = 0
+        frame_count = 0
         while(True):
             print("inside loop main()")
             if RESPONSE_SENT and RUN_MODE:
@@ -479,11 +582,11 @@ def run(objyaml):
             print(f"IMG_STRING_TUPLES: {IMG_STRING_TUPLES}")
             print(f"MD: {MD}")
             while not (MD and IMG_STRING_TUPLES) and RUN_MODE:
-                print(f"IMG_STRING_TUPLES: {IMG_STRING_TUPLES}")
-                print(f"MD: {MD}")
-                print("not (MD and IMG_STRING_TUPLES) and RUN_MODE: "+str(not (MD and IMG_STRING_TUPLES) and RUN_MODE))
-                LOGGER.info("Waiting for API request going to sleep for 1 sec.")
-                time.sleep(1)
+                #print(f"IMG_STRING_TUPLES: {IMG_STRING_TUPLES}")
+                #print(f"MD: {MD}")
+                #print("not (MD and IMG_STRING_TUPLES) and RUN_MODE: "+str(not (MD and IMG_STRING_TUPLES) and RUN_MODE))
+                #LOGGER.info("Waiting for API request going to sleep for 1 msec.")
+                time.sleep(0.001)
             print('Receive Status from API for')
             input_json = MD
             img_list_tuples = IMG_STRING_TUPLES
@@ -495,28 +598,35 @@ def run(objyaml):
             temp_start1 = time.time()*1000
             image_string = img_list_tuples[0]["image_string"]
             print("Length of image "+str(i+1)+": "+str(len(image_string)))
+            encode_start = time.time()*1000
             jpg_original = base64.b64decode(image_string.encode("utf-8"))
             jpg_as_np = np.frombuffer(jpg_original, dtype=np.uint8)
             img_matlab = cv2.imdecode(jpg_as_np, flags=1)
+            encode_end = time.time()*1000
+            print(f"time taken to decode img: {encode_end - encode_start}")
             roi = [polygon_roi[0][0], polygon_roi[0][1],\
                                                  polygon_roi[2][0], polygon_roi[2][1]]
             #TODO
             '''
             performing yolo inference and tracking
             '''
-            im0 = process_frame(img_matlab, stride, nr_sources, model, device, half, model_version,visualize,\
+            im0 = process_frame(img_matlab, stride, nr_sources, USECASE, model, names, device, half, model_version,visualize,\
                           roi, pt, conf_thres, iou_thres, classes,agnostic_nms, cfg, \
                           strongsort_list, save_vid, save_crop, save_txt, show_vid, max_det=max_det, img_size=640)
-            frame_name = f"/WS/frame_dumps/debug_frame_{count}.jpg"
-            cv2.imwrite(frame_name, im0)
-            print(f"{frame_name} exists: {os.path.isfile(frame_name)}")
+            #frame_name = f"/WS/frame_dumps/debug_frame_{frame_count}.jpg"
+            #cv2.imwrite(frame_name, im0)
+            encode_start = time.time()*1000
+            img_str = base64.b64encode(cv2.imencode('.bmp', im0)[1]).decode("utf-8")
+            encode_end = time.time()*1000
+            print(f"time taken to encode img: {encode_end - encode_start}")
+            #print(f"{frame_name} exists: {os.path.isfile(frame_name)}")
             MD["receiver"] = MD['sender']+ " world!!"
-            input_json = MD
+            input_json = {"image_string": img_str, "Receiver_data": MD}
             send_json = json.dumps(input_json)
             MD =None
             IMG_STRING_TUPLES = None
             RESPONSE = send_json
-            count += 1
+            frame_count += 1
     else:
         vid_path, vid_writer, txt_path = [None] * nr_sources, [None] * nr_sources, [None] * nr_sources
 
@@ -595,7 +705,8 @@ def run(objyaml):
                 thickness = 2
                 im0 = cv2.polylines(im0, [pts],
                           isClosed, color, thickness)
-                im0 = cv2.line(im0, line[0],line[1], (255,0,0), thickness)
+                if USECASE != "Billboard":
+                    im0 = cv2.line(im0, line[0],line[1], (255,0,0), thickness)
                 annotator = Annotator(im0, line_width=2, pil=not ascii)
                 if cfg.STRONGSORT.ECC:  # camera motion compensation
                     strongsort_list[i].tracker.camera_update(prev_frames[i], curr_frames[i])
@@ -764,6 +875,7 @@ def parse_opt():
     parser.add_argument('--model-version', help='yolov4 or yolov5')
     parser.add_argument('--cfg', default="yolov4-csp-custom.cfg", help='yolov4 cfg file')
     parser.add_argument('--fps', default="5", help='video fps')
+    #parser.add_argument('--usecase', help='[Billboard, TyreCounting]')
     opt = parser.parse_args()
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand
     print_args(vars(opt))

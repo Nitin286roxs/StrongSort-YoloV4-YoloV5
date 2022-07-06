@@ -65,9 +65,10 @@ def check_pil_font(font=FONT, size=10):
             return ImageFont.load_default()
 
 unique_tyre = []
+unique_person_seen_bilboard = []
 class Annotator:
     # YOLOv5 Annotator for train/val mosaics and jpgs and detect/hub inference annotations
-    def __init__(self, im, line_width=None, font_size=None, font='Arial.ttf', pil=False, example='abc'):
+    def __init__(self, im, isEyeDetection, isGenderClassification, line_width=None, font_size=None, font='Arial.ttf', pil=False, example='abc'):
         assert im.data.contiguous, 'Image not contiguous. Apply np.ascontiguousarray(im) to Annotator() input images.'
         non_ascii = not is_ascii(example)  # non-latin labels, i.e. asian, arabic, cyrillic
         self.pil = pil or non_ascii
@@ -79,8 +80,11 @@ class Annotator:
         else:  # use cv2
             self.im = im
         self.lw = line_width or max(round(sum(im.shape) / 2 * 0.003), 2)  # line width
+        #Gender and Eye Drawing
+        self.isEyeDetection = True
+        self.isGenderClassification = True 
 
-    def box_label(self, box, iou_conf, isLoaded, label='', color=(128, 128, 128), txt_color=(255, 255, 255)):
+    def box_label_tyrecounting(self, box, iou_conf, isLoaded, label='', color=(128, 128, 128), txt_color=(255, 255, 255)):
         # Add one xyxy box to image with label
         if self.pil or not is_ascii(label):
             self.draw.rectangle(box, width=self.lw, outline=color)  # box
@@ -125,6 +129,55 @@ class Annotator:
                             txt_color,
                             thickness=tf*2,
                             lineType=cv2.LINE_AA)
+    def box_label_billboard(self, box, gender, genderConf, is_eye_visible, label='', color=(255, 0, 0), txt_color=(255, 255, 255)):
+        # Add one xyxy box to image with label
+        global unique_person_seen_bilboard
+        if self.pil or not is_ascii(label):
+            self.draw.rectangle(box, width=self.lw, outline=color)  # box
+            if label:
+                w, h = self.font.getsize(label)  # text width, height
+                outside = box[1] - h >= 0  # label fits outside box
+                self.draw.rectangle((box[0],
+                                     box[1] - h if outside else box[1],
+                                     box[0] + w + 1,
+                                     box[1] + 1 if outside else box[1] + h + 1), fill=color)
+                # self.draw.text((box[0], box[1]), label, fill=txt_color, font=self.font, anchor='ls')  # for PIL>8.0
+                self.draw.text((box[0], box[1] - h if outside else box[1]), label, fill=txt_color, font=self.font)
+        else:  # cv2
+            p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
+            cv2.rectangle(self.im, p1, p2, color, thickness=self.lw, lineType=cv2.LINE_AA)
+            if is_eye_visible:
+                Id = label.strip().split(" ")[0]
+                if Id not in unique_person_seen_bilboard:
+                    unique_person_seen_bilboard.append(Id)
+            billboard_label = f"No. of People who had seen the banner: {len(unique_person_seen_bilboard)}"
+            tf = max(self.lw - 1, 1)
+            w, h = cv2.getTextSize(billboard_label, 0, fontScale=self.lw*0.75, thickness=tf*2)[0]
+            p1 = (0, self.im.shape[0]-h)
+            outside = p1[1] - h >= 0
+            p2 = (p1[0]+w, p1[1] - h  if outside else p1[1] + h )
+            #p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
+            cv2.rectangle(self.im, p1, p2, (0, 0, 255), thickness=-1, lineType=cv2.LINE_AA)
+            cv2.putText(self.im, billboard_label, (p1[0], p1[1] - 2 if outside else p1[1] + h + 2), 0, self.lw*0.75, txt_color,
+                            thickness=tf*2, lineType=cv2.LINE_AA)
+            if label:
+                p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
+                #tf = max(self.lw - 1, 1)  # font thickness
+                w, h = cv2.getTextSize(label, 0, fontScale=self.lw / 3, thickness=tf)[0]  # text width, height
+                outside = p1[1] - h - 3 >= 0  # label fits outside box
+                p2 = p1[0] + w, p1[1] - h - 3 if outside else p1[1] + h + 3
+                cv2.rectangle(self.im, p1, p2, color, -1, cv2.LINE_AA)  # filled
+                cv2.putText(self.im, label, (p1[0], p1[1] - 2 if outside else p1[1] + h + 2), 0, self.lw / 3, txt_color,
+                            thickness=tf, lineType=cv2.LINE_AA)
+                if self.isGenderClassification:
+                    p1, p2 = (int(box[0]), int(box[3])), (int(box[2]), int(box[3]))
+                    gender_label = f'{gender}:{genderConf:.2f}'
+                    w, h = cv2.getTextSize(gender_label, 0, fontScale=self.lw / 3, thickness=tf)[0]
+                    p1= (p1[0]), (p1[1]-3)
+                    p2 = p1[0] + w, p1[1] - h - 3 if outside else p1[1] + h + 3
+                    cv2.rectangle(self.im, p1, p2, color, -1, cv2.LINE_AA)
+                    cv2.putText(self.im, f'{gender}:{genderConf:.2f}', (p1[0], p1[1] - 2 if outside else p1[1] + h + 2), 0, self.lw / 3, txt_color,
+                            thickness=tf, lineType=cv2.LINE_AA)
 
     def rectangle(self, xy, fill=None, outline=None, width=1):
         # Add rectangle to image (PIL-only)
