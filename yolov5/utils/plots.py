@@ -101,21 +101,21 @@ class Annotator:
         else:  # cv2
             p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
             cv2.rectangle(self.im, p1, p2, color, thickness=self.lw, lineType=cv2.LINE_AA)
-            if iou_conf:
-                Id = label.strip().split(" ")[0]
-                if Id not in unique_tyre:
-                    if isLoaded:
-                        unique_tyre.append(Id)
-            loading_label = f"No. of Tyre Loaded: {len(unique_tyre)}"
+            #if iou_conf:
+            #    Id = label.strip().split(" ")[0]
+            #    if Id not in unique_tyre:
+            #        if isLoaded:
+            #            unique_tyre.append(Id)
+            #loading_label = f"No. of Tyre Loaded: {len(unique_tyre)}"
             tf = max(self.lw - 1, 1)
-            w, h = cv2.getTextSize(loading_label, 0, fontScale=self.lw, thickness=tf*4)[0]
-            p1_ = (0, self.im.shape[0]-h)
-            outside = p1_[1] - h >= 0
-            p2_ = (p1_[0]+w, p1_[1] - h  if outside else p1_[1] + h )
-            #p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
-            cv2.rectangle(self.im, p1_, p2_, (0, 0, 255), thickness=-1, lineType=cv2.LINE_AA)
-            cv2.putText(self.im, loading_label, (p1_[0], p1_[1] - 2 if outside else p1_[1] + h + 2), 0, self.lw, txt_color,
-                            thickness=tf*4, lineType=cv2.LINE_AA)
+            #w, h = cv2.getTextSize(loading_label, 0, fontScale=self.lw, thickness=tf*4)[0]
+            #p1_ = (0, self.im.shape[0]-h)
+            #outside = p1_[1] - h >= 0
+            #p2_ = (p1_[0]+w, p1_[1] - h  if outside else p1_[1] + h )
+            ##p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
+            #cv2.rectangle(self.im, p1_, p2_, (0, 0, 255), thickness=-1, lineType=cv2.LINE_AA)
+            #cv2.putText(self.im, loading_label, (p1_[0], p1_[1] - 2 if outside else p1_[1] + h + 2), 0, self.lw, txt_color,
+            #                thickness=tf*4, lineType=cv2.LINE_AA)
             if label:
                 tf = max(self.lw - 1, 1)  # font thickness
                 w, h = cv2.getTextSize(label, 0, fontScale=self.lw, thickness=tf*2)[0]  # text width, height
@@ -146,20 +146,20 @@ class Annotator:
         else:  # cv2
             p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
             cv2.rectangle(self.im, p1, p2, color, thickness=self.lw, lineType=cv2.LINE_AA)
-            if is_eye_visible:
-                Id = label.strip().split(" ")[0]
-                if Id not in unique_person_seen_bilboard:
-                    unique_person_seen_bilboard.append(Id)
-            billboard_label = f"No. of People who had seen the banner: {len(unique_person_seen_bilboard)}"
+            #if is_eye_visible:
+            #    Id = label.strip().split(" ")[0]
+            #    if Id not in unique_person_seen_bilboard:
+            #        unique_person_seen_bilboard.append(Id)
+            #billboard_label = f"No. of People who had seen the banner: {len(unique_person_seen_bilboard)}"
             tf = max(self.lw - 1, 1)
-            w, h = cv2.getTextSize(billboard_label, 0, fontScale=self.lw*0.75, thickness=tf*2)[0]
-            p1 = (0, self.im.shape[0]-h)
-            outside = p1[1] - h >= 0
-            p2 = (p1[0]+w, p1[1] - h  if outside else p1[1] + h )
-            #p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
-            cv2.rectangle(self.im, p1, p2, (0, 0, 255), thickness=-1, lineType=cv2.LINE_AA)
-            cv2.putText(self.im, billboard_label, (p1[0], p1[1] - 2 if outside else p1[1] + h + 2), 0, self.lw*0.75, txt_color,
-                            thickness=tf*2, lineType=cv2.LINE_AA)
+            #w, h = cv2.getTextSize(billboard_label, 0, fontScale=self.lw*0.75, thickness=tf*2)[0]
+            #p1 = (0, self.im.shape[0]-h)
+            #outside = p1[1] - h >= 0
+            #p2 = (p1[0]+w, p1[1] - h  if outside else p1[1] + h )
+            ##p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
+            #cv2.rectangle(self.im, p1, p2, (0, 0, 255), thickness=-1, lineType=cv2.LINE_AA)
+            #cv2.putText(self.im, billboard_label, (p1[0], p1[1] - 2 if outside else p1[1] + h + 2), 0, self.lw*0.75, txt_color,
+            #                thickness=tf*2, lineType=cv2.LINE_AA)
             if label:
                 p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
                 #tf = max(self.lw - 1, 1)  # font thickness

@@ -18,7 +18,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1"
 try:
     RUN_MODE = int(os.environ["RUN_MODE"])
 except KeyError:
-    RUN_MODE = 1
+    RUN_MODE = 0
 
 import sys
 import base64
@@ -62,7 +62,13 @@ from extended_apilayer import ExtApiLayer, add_method
 # remove duplicated stream handler to avoid duplicated logging
 logging.getLogger().removeHandler(logging.getLogger().handlers[0])
 
+import socket
+import imagezmq
 LOCK = threading.Lock()
+sender = None
+if RUN_MODE == 0:
+    sender = imagezmq.ImageSender(connect_to='tcp://*:5555', REQ_REP=False)
+    host_name = 'From Sender' #socket.gethostname()
 
 genderNet = None
 eyes_cascade = None
@@ -628,10 +634,33 @@ def run(objyaml):
             RESPONSE = send_json
             frame_count += 1
     else:
+        # Dataloader
+        nr_sources = 0
+        if webcam:
+            print("I'm checking webcam!!")
+            show_vid = check_imshow()
+            cudnn.benchmark = True  # set True to speed up constant image size inference
+            if model_version=="yolov5":
+                dataset = LoadStreams(polygon_roi, source ,img_size=imgsz, stride=stride, auto=pt)
+                nr_sources = len(dataset)
+            else:
+                dataset = LoadStreamsV4(polygon_roi, source, img_size=imgsz)
+                nr_sources = 1
+            #nr_sources = len(dataset)
+        else:
+            print("I'm Here!!")
+            if model_version=="yolov5":
+                dataset = LoadImages(polygon_roi, source, img_size=imgsz, stride=stride, auto=pt)
+            else:
+                save_img = True
+                dataset = LoadImagesV4(polygon_roi, source, img_size=imgsz, auto_size=64)
+            nr_sources = 1
         vid_path, vid_writer, txt_path = [None] * nr_sources, [None] * nr_sources, [None] * nr_sources
 
         outputs = [None] * nr_sources
         unique_tyre_centroid = {}
+        unique_tyre = []
+        unique_person_seen_bilboard = []
         # Run tracking
         if model_version=="yolov5":
             model.warmup(imgsz=(1 if pt else nr_sources, 3, *imgsz))  # warmup
@@ -707,7 +736,14 @@ def run(objyaml):
                           isClosed, color, thickness)
                 if USECASE != "Billboard":
                     im0 = cv2.line(im0, line[0],line[1], (255,0,0), thickness)
-                annotator = Annotator(im0, line_width=2, pil=not ascii)
+                isEyeDetection = None
+                isGenderClassification = None
+                isEyeVisible = None
+                if USECASE == "Billboard":
+                    isEyeDetection = True
+                    isGenderClassification = True
+                    isEyeVisible = False
+                annotator = Annotator(im0, isEyeDetection, isGenderClassification, line_width=2, pil=not ascii)
                 if cfg.STRONGSORT.ECC:  # camera motion compensation
                     strongsort_list[i].tracker.camera_update(prev_frames[i], curr_frames[i])
 
@@ -733,16 +769,58 @@ def run(objyaml):
                     outputs[i] = strongsort_list[i].update(xywhs.cpu(), confs.cpu(), clss.cpu(), im0)
                     t5 = time_sync()
                     dt[3] += t5 - t4
-
+                    
                     # draw boxes for visualization
                     if len(outputs[i]) > 0:
                         for j, (output, conf) in enumerate(zip(outputs[i], confs)):
-        
+    
                             bboxes = output[0:4]
                             #print(f"yolo deepsort co-ord : {bboxes}")
                             id = output[4]
                             cls = output[5]
-
+                            if isEyeDetection and isGenderClassification:
+                                face = im0[int(max(0,bboxes[1])):int(min(bboxes[3],im0.shape[0]-1)),int(max(0,bboxes[0])):int(min(bboxes[2], im0.shape[1]-1))]
+                                #TODO 
+                                '''
+                                Applying gamma correction on face.
+                                '''
+                                #count += 1
+                                face_temp_gray = cv2.cvtColor(face, cv2.COLOR_BGR2GRAY)
+                                mean = np.mean(face_temp_gray)
+                                mid = automate_histogram_mid(mean)
+                                gamma = math.log(mid)/math.log(mean/255)
+                                # do gamma correction
+                                face_gamma = adjust_gamma(face, gamma)
+                                #print(face.shape)
+                                blob = cv2.dnn.blobFromImage(face, 1.0, (227, 227), MODEL_MEAN_VALUES, swapRB=False)
+                                genderNet.setInput(blob)
+                                genderPreds = genderNet.forward()
+                                gender = genderList[genderPreds[0].argmax()]
+                                genderConf = genderPreds[0].max()
+                                #Adding grayscaled face patch to original image
+                                img0_gamma = im0.copy()
+                                img0_gamma[int(max(0,bboxes[1])):int(min(bboxes[3],im0.shape[0]-1)),int(max(0,bboxes[0])):int(min(bboxes[2], im0.shape[1]-1))] = face_gamma
+                                frame_gray = cv2.cvtColor(img0_gamma, cv2.COLOR_BGR2GRAY)
+                                frame_gray = cv2.equalizeHist(frame_gray)
+                                faceROI = frame_gray[int(max(0,bboxes[1])):int(min(bboxes[3],im0.shape[0]-1)),int(max(0,bboxes[0])):int(min(bboxes[2], im0.shape[1]-1))]
+                                #if True:#dump_gamma_corrected:
+                                #    cv2.imwrite(f"/WS/gamma_corrected/{count}.jpg", face)
+                                #    cv2.imwrite(f"/WS/gamma_corrected/{count}_greyscale.jpg", face_temp_gray)
+                                #    cv2.imwrite(f"/WS/gamma_corrected/{count}_gamma.jpg", face_gamma)
+                                #    cv2.imwrite(f"/WS/gamma_corrected/{count}_org_full.jpg", im0)
+                                #    cv2.imwrite(f"/WS/gamma_corrected/{count}_gamma_full.jpg", img0_gamma)
+                                eyes = eyes_cascade.detectMultiScale(faceROI,1.3, 5)
+                                #print(f"eyes: {eyes}")
+                                if len(eyes):
+                                    is_eye_visible = True
+                                else:
+                                    is_eye_visible = False
+                                for (x2,y2,w2,h2) in eyes:
+                                    eye_center = (int(bboxes[0] + x2 + w2//2), int(bboxes[1] + y2 + h2//2))
+                                    radius = int(round((w2 + h2)*0.25))
+                                    #print(f"eye_center: {eye_center}")
+                                    #print(f"eyes radius: {radius}")
+                                    im0 = cv2.circle(im0, eye_center, radius, (255, 255, 0 ), 4)
                             if save_txt:
                                 # to MOT format
                                 bbox_left = output[0]
@@ -762,49 +840,128 @@ def run(objyaml):
                                 #iou_conf = iou_check(bboxes, roi)
                                 label = None if hide_labels else (f'{id} {names[c]}' if hide_conf else \
                                     (f'{id} {conf:.2f}' if hide_class else f'{id} {names[c]} {conf:.2f}'))
-                                #iou_conf = iou_check(bboxes, roi)
+                                iou_conf = iou_check(bboxes, roi)
                                 #print(f"iou_conf: {iou_conf}")
-                                if True: #iou_conf > 0.1:
-                                    tyre_id = f'{id:0.0f}'
-                                    if tyre_id not in unique_tyre_centroid:
-                                        unique_tyre_centroid = {}
-                                        unique_tyre_centroid[tyre_id] = {"trail-path": [], "isLoaded": False}
-                                    centroid = int(bboxes[0]) , int((bboxes[1] + bboxes[3])// 2)
-                                    unique_tyre_centroid[tyre_id]["trail-path"].append(centroid)
-                                    for point in unique_tyre_centroid[tyre_id]["trail-path"]:
-                                        print(f"point: {point}")
-                                        annotator.im = cv2.circle(annotator.im, point, 5, (255,0,255), thickness=3)
-                                    #TODO Line Crossing Logic
-                                    '''
-                                    If mid poit of tyre's TOP-LEFT and BOTTOM-LEFT cross the drawn line then We can say tyre is 
-                                    loaded.
-                                    '''
-                                    #TODO 
-                                    '''
-                                    For Futur, We will implement
-                                    ENTRY and EXIT Logic 
-                                    '''
-                                    '''
-                                    Equation of line
-                                    A(X1, Y1), B(X2, Y2)
-                                    '''
-                                    if not unique_tyre_centroid[tyre_id]["isLoaded"]:
-                                        (X1,Y1), (X2,Y2) = line[0], line[1]
-                                        PX,PY = centroid
-                                        Z = PX*(Y2-Y1)-PY*(X2-X1)-X1*(Y2-Y1)+Y1*(X2-X1)
-                                        if Z <= 0:
-                                            #Centroid is on or left side of line, means Tyre is loaded
-                                            unique_tyre_centroid[tyre_id]["isLoaded"] = True
-                                    annotator.box_label(bboxes, 1.0,unique_tyre_centroid[tyre_id]["isLoaded"], label, color=colors(c, True))
+                                if iou_conf > 0.5:
+                                    if USECASE == "Billboard":
+                                        annotator.box_label_billboard(bboxes, gender, genderConf, is_eye_visible, label, color=colors(c, True))
+                                        if is_eye_visible:
+                                            Id = label.strip().split(" ")[0]
+                                            if Id not in unique_person_seen_bilboard:
+                                                unique_person_seen_bilboard.append(Id)
+                                #        billboard_label = f"No. of People who had seen the banner: {len(unique_person_seen_bilboard)}"
+                                #        tf = max(annotator.lw - 1, 1)
+                                #        w, h = cv2.getTextSize(billboard_label, 0, fontScale=\
+                                #                            annotator.lw, thickness=tf*4)[0]
+                                #        p1, p2 = (int(bboxes[0]), int(bboxes[1])), (int(bboxes[2]), int(bboxes[3]))
+                                #        p1_ = (0, annotator.im.shape[0]-h)
+                                #        outside = p1_[1] - h >= 0
+                                #        p2_ = (p1_[0]+w, p1_[1] - h  if outside else p1_[1] + h )
+                                #        #p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
+                                #        cv2.rectangle(annotator.im, p1_, p2_, (0, 0, 255), thickness=-1, lineType=cv2.LINE_AA)
+                                #        cv2.putText(annotator.im, billboard_label, (p1_[0], p1_[1] - 2 \
+                                #                if outside else p1_[1] + h + 2), 0, annotator.lw, txt_color,\
+                                #                thickness=tf*4, lineType=cv2.LINE_AA)
+
+                                    if USECASE == "TyreCounting":
+                                        tyre_id = f'{id:0.0f}'
+                                        if tyre_id not in unique_tyre_centroid:
+                                            unique_tyre_centroid = {}
+                                            unique_tyre_centroid[tyre_id] = {"trail-path": [], "isLoaded": False}
+                                        centroid = int(bboxes[0]) , int((bboxes[1] + bboxes[3])// 2)
+                                        unique_tyre_centroid[tyre_id]["trail-path"].append(centroid)
+                                        for point in unique_tyre_centroid[tyre_id]["trail-path"]:
+                                            print(f"point: {point}")
+                                            annotator.im = cv2.circle(annotator.im, point, 5, (255,0,255), thickness=3)
+                                        #TODO Line Crossing Logic
+                                        '''
+                                        If mid poit of tyre's TOP-LEFT and BOTTOM-LEFT cross the drawn line then We can say tyre is 
+                                        loaded.
+                                        '''
+                                        #TODO 
+                                        '''
+                                        For Futur, We will implement
+                                        ENTRY and EXIT Logic 
+                                        '''
+                                        '''
+                                        Equation of line
+                                        A(X1, Y1), B(X2, Y2)
+                                        '''
+                                        if not unique_tyre_centroid[tyre_id]["isLoaded"]:
+                                            (X1,Y1), (X2,Y2) = line[0], line[1]
+                                            PX,PY = centroid
+                                            Z = PX*(Y2-Y1)-PY*(X2-X1)-X1*(Y2-Y1)+Y1*(X2-X1)
+                                            if Z <= 0:
+                                                #Centroid is on or left side of line, means Tyre is loaded
+                                                unique_tyre_centroid[tyre_id]["isLoaded"] = True
+                                                annotator.box_label_tyrecounting(bboxes, 1.0,\
+                                                                    unique_tyre_centroid[tyre_id]\
+                                                                    ["isLoaded"], label, color=colors(c, True))
+                                                Id = label.strip().split(" ")[0]
+                                                if Id not in unique_tyre:
+                                                    unique_tyre.append(Id)
+                                        #loading_label = f"No. of Tyre Loaded: {len(unique_tyre)}"
+                                        #tf = max(annotator.lw - 1, 1)
+                                        #w, h = cv2.getTextSize(loading_label, 0, fontScale=\
+                                        #                    annotator.lw, thickness=tf*4)[0]
+                                        #p1, p2 = (int(bboxes[0]), int(bboxes[1])), (int(bboxes[2]), int(bboxes[3]))
+                                        #p1_ = (0, annotator.im.shape[0]-h)
+                                        #outside = p1_[1] - h >= 0
+                                        #p2_ = (p1_[0]+w, p1_[1] - h  if outside else p1_[1] + h )
+                                        ##p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
+                                        #cv2.rectangle(annotator.im, p1_, p2_, (0, 0, 255), thickness=-1, lineType=cv2.LINE_AA)
+                                        #cv2.putText(annotator.im, loading_label, (p1_[0], p1_[1] - 2 \
+                                        #        if outside else p1_[1] + h + 2), 0, annotator.lw, txt_color,\
+                                        #        thickness=tf*4, lineType=cv2.LINE_AA)
                                 if save_crop:
                                     txt_file_name = txt_file_name if (isinstance(path, list) and len(path) > 1) else ''
                                     save_one_box(bboxes, imc, file=save_dir / 'crops' / txt_file_name / names[c] / f'{id}' / f'{p.stem}.jpg', BGR=True)
-
                     LOGGER.info(f'{s}Done. YOLO:({t3 - t2:.3f}s), StrongSORT:({t5 - t4:.3f}s)')
 
                 else:
                     strongsort_list[i].increment_ages()
                     LOGGER.info('No detections')
+                txt_color=(255, 255, 255)
+                if USECASE == "Billboard":
+                    #annotator.box_label_billboard(bboxes, gender, genderConf, is_eye_visible, label, color=colors(c, True))
+                    #if is_eye_visible:
+                    #    Id = label.strip().split(" ")[0]
+                    #    if Id not in unique_person_seen_bilboard:
+                    #        unique_person_seen_bilboard.append(Id)
+                    billboard_label = f"No. of People who had seen the banner: {len(unique_person_seen_bilboard)}"
+                    tf = max(annotator.lw - 1, 1)
+                    w, h = cv2.getTextSize(billboard_label, 0, fontScale=\
+                                        annotator.lw, thickness=tf*4)[0]
+                    p1_ = (0, annotator.im.shape[0]-h)
+                    outside = p1_[1] - h >= 0
+                    p2_ = (p1_[0]+w, p1_[1] - h  if outside else p1_[1] + h )
+                    #p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
+                    cv2.rectangle(annotator.im, p1_, p2_, (0, 0, 255), thickness=-1, lineType=cv2.LINE_AA)
+                    cv2.putText(annotator.im, billboard_label, (p1_[0], p1_[1] - 2 \
+                            if outside else p1_[1] + h + 2), 0, annotator.lw, txt_color,\
+                            thickness=tf*4, lineType=cv2.LINE_AA)
+                else:
+                    #Id = label.strip().split(" ")[0]
+                    #if Id not in unique_tyre:
+                    #    if isLoaded:
+                    #        unique_tyre.append(Id)
+
+                    loading_label = f"No. of Tyre Loaded: {len(unique_tyre)}"
+                    tf = max(annotator.lw - 1, 1)
+                    w, h = cv2.getTextSize(loading_label, 0, fontScale=\
+                                        annotator.lw, thickness=tf*4)[0]
+                    #p1, p2 = (int(bboxes[0]), int(bboxes[1])), (int(bboxes[2]), int(bboxes[3]))
+                    p1_ = (0, annotator.im.shape[0]-h)
+                    outside = p1_[1] - h >= 0
+                    p2_ = (p1_[0]+w, p1_[1] - h  if outside else p1_[1] + h )
+                    #p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
+                    cv2.rectangle(annotator.im, p1_, p2_, (0, 0, 255), thickness=-1, lineType=cv2.LINE_AA)
+                    cv2.putText(annotator.im, loading_label, (p1_[0], p1_[1] - 2 \
+                            if outside else p1_[1] + h + 2), 0, annotator.lw, txt_color,\
+                            thickness=tf*4, lineType=cv2.LINE_AA)
+
+
+                                    
 
                 # Stream results
                 im0 = annotator.result()
@@ -829,6 +986,8 @@ def run(objyaml):
                     vid_writer[i].write(im0)
 
                 prev_frames[i] = curr_frames[i]
+            #Send image to server to imshow
+            sender.send_image(host_name, im0)
 
         # Print results
         t = tuple(x / seen * 1E3 for x in dt)  # speeds per image
