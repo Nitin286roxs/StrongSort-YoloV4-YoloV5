@@ -1,12 +1,10 @@
-#yolo-weights: "/app/test/best_225.pt"                        # model.pt path(s) for Tyre Detection
-yolo-weights: "/app/test/crowdhuman_yolov5m.pt"                        # model.pt path(s) for Tyre Detection
+yolo-weights: "/app/test/best_225.pt"                        # model.pt path(s)
 strong-sort: "osnet_x0_25_market1501.pt"                  # model.pt path,
-#source: "/app/test/single_person_tracking_10_fps.mp4" #"rtsp://admin:admin@192.168.0.142:554/Streaming/Channels/2" #"rtsp://admin:admin@14.97.123.245/:554/0/main"
-source: "rtsp://admin:admin@192.168.0.143/:554/6/main"
-conf-thres: 0.8                                         # confidence threshold
+source: "/app/test/Stream_245_9.mp4" #"rtsp://admin:admin@192.168.0.142:554/Streaming/Channels/2" #"rtsp://admin:admin@14.97.123.245/:554/0/main" 
+conf-thres: 0.1                                         # confidence threshold
 iou-thres: 0.1                                          # NMS IOU threshold
 save-vid: True                                          # save confidences in --save-txt labels
-model-version: yolov5                                   # yolo model-type yolov4 or v5
+model-version: yolov4                                   # yolo model-type yolov4 or v5
 cfg: "yolov4/models/yolov4-csp-custom.cfg"              # only Yolov4 use this cfg, for yolov5 can be none
 device: 0                                               # device
 fps: 25                                                 # output fps

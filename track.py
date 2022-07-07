@@ -1,7 +1,10 @@
 #ROI For tyre counting
-polygon_roi = [[405,220], [1075,237], [1220,915], [275,920]]
+#polygon_roi = [[405,220], [1075,237], [1220,915], [275,920]]
 line = [(630,360), (600,950)]
 #ROI for Bilboard
+#ROI for 1280, 720
+polygon_roi = [[435,130], [775,125], [1020,720], [210,720]]
+#ROI for 1920 , 1080 
 #polygon_roi = [[750,425], [1295,425], [1475,1290], [500,1290]]
 #polygon_roi = [[770,330],[1705,330],[1705, 1290], [770, 1290]]
 MODEL_MEAN_VALUES = (78.4263377603, 87.7689143744, 114.895847746)
@@ -638,7 +641,7 @@ def run(objyaml):
         nr_sources = 0
         if webcam:
             print("I'm checking webcam!!")
-            show_vid = check_imshow()
+            #show_vid = check_imshow()
             cudnn.benchmark = True  # set True to speed up constant image size inference
             if model_version=="yolov5":
                 dataset = LoadStreams(polygon_roi, source ,img_size=imgsz, stride=stride, auto=pt)
@@ -672,8 +675,8 @@ def run(objyaml):
         print(f"nr_sources: {nr_sources}, curr_frames: {curr_frames} and prev_frames: {prev_frames}")
         for frame_idx, (path, im, im0s, vid_cap, s) in enumerate(dataset):
             print(f"s: {s}")
-            print(f"im shape: {len(im)}")
-            print(f"im0 shape: {len(im0s)}")
+            print(f"im shape: {(im[0]).shape}")
+            print(f"im0 shape: {(im0s[0]).shape}")
             t1 = time_sync()
             im = torch.from_numpy(im).to(device)
             im = im.half() if half else im.float()  # uint8 to fp16/32
@@ -931,15 +934,15 @@ def run(objyaml):
                     billboard_label = f"No. of People who had seen the banner: {len(unique_person_seen_bilboard)}"
                     tf = max(annotator.lw - 1, 1)
                     w, h = cv2.getTextSize(billboard_label, 0, fontScale=\
-                                        annotator.lw, thickness=tf*4)[0]
+                                        annotator.lw/2, thickness=tf*2)[0]
                     p1_ = (0, annotator.im.shape[0]-h)
                     outside = p1_[1] - h >= 0
                     p2_ = (p1_[0]+w, p1_[1] - h  if outside else p1_[1] + h )
                     #p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
                     cv2.rectangle(annotator.im, p1_, p2_, (0, 0, 255), thickness=-1, lineType=cv2.LINE_AA)
                     cv2.putText(annotator.im, billboard_label, (p1_[0], p1_[1] - 2 \
-                            if outside else p1_[1] + h + 2), 0, annotator.lw, txt_color,\
-                            thickness=tf*4, lineType=cv2.LINE_AA)
+                            if outside else p1_[1] + h + 2), 0, annotator.lw/2, txt_color,\
+                            thickness=tf*2, lineType=cv2.LINE_AA)
                 else:
                     #Id = label.strip().split(" ")[0]
                     #if Id not in unique_tyre:
@@ -949,7 +952,7 @@ def run(objyaml):
                     loading_label = f"No. of Tyre Loaded: {len(unique_tyre)}"
                     tf = max(annotator.lw - 1, 1)
                     w, h = cv2.getTextSize(loading_label, 0, fontScale=\
-                                        annotator.lw, thickness=tf*4)[0]
+                                        annotator.lw, thickness=tf)[0]
                     #p1, p2 = (int(bboxes[0]), int(bboxes[1])), (int(bboxes[2]), int(bboxes[3]))
                     p1_ = (0, annotator.im.shape[0]-h)
                     outside = p1_[1] - h >= 0
@@ -957,17 +960,17 @@ def run(objyaml):
                     #p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
                     cv2.rectangle(annotator.im, p1_, p2_, (0, 0, 255), thickness=-1, lineType=cv2.LINE_AA)
                     cv2.putText(annotator.im, loading_label, (p1_[0], p1_[1] - 2 \
-                            if outside else p1_[1] + h + 2), 0, annotator.lw, txt_color,\
-                            thickness=tf*4, lineType=cv2.LINE_AA)
+                            if outside else p1_[1] + h + 2), 0, annotator.lw/2, txt_color,\
+                            thickness=tf*2, lineType=cv2.LINE_AA)
 
 
                                     
 
                 # Stream results
                 im0 = annotator.result()
-                if show_vid:
-                    cv2.imshow(str(p), im0)
-                    cv2.waitKey(1)  # 1 millisecond
+                #if show_vid:
+                #    cv2.imshow(str(p), im0)
+                #    cv2.waitKey(1)  # 1 millisecond
 
                 # Save results (image with detections)
                 if save_vid:
@@ -987,6 +990,8 @@ def run(objyaml):
 
                 prev_frames[i] = curr_frames[i]
             #Send image to server to imshow
+            im0 = cv2.resize(im0, (1920, 1080))
+            #im0 = cv2.resize(im0, (1920, 1080),interpolation = cv2.INTER_NEAREST)
             sender.send_image(host_name, im0)
 
         # Print results

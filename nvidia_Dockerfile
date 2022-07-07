@@ -1,4 +1,4 @@
-FROM api_layer:22.07.04  as apilayer_base
+FROM api_layer:prod  as apilayer_base
 FROM nvidia/cuda:11.6.0-base-ubuntu20.04 as dev 
 
 LABEL maintainer="nitin@safepro.com"
@@ -21,6 +21,7 @@ COPY run.sh /app/StrongSort-YoloV4-YoloV5/
 
 COPY --from=apilayer_base /opt/apilayer-*.whl /tmp/ApiLayer/
 RUN pip3 install /tmp/ApiLayer/apilayer-*.whl
+RUN pip3 install imagezmq
 COPY extended_apilayer.py /app/StrongSort-YoloV4-YoloV5/
 
 WORKDIR /app/StrongSort-YoloV4-YoloV5/
