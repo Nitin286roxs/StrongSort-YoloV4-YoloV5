@@ -21,7 +21,8 @@ COPY run.sh /app/StrongSort-YoloV4-YoloV5/
 
 COPY --from=apilayer_base /opt/apilayer-*.whl /tmp/ApiLayer/
 RUN pip3 install /tmp/ApiLayer/apilayer-*.whl
-RUN pip3 install imagezmq
+RUN pip3 install imagezmq openvino 
+RUN pip3 install numpy==1.23.0
 COPY extended_apilayer.py /app/StrongSort-YoloV4-YoloV5/
 
 WORKDIR /app/StrongSort-YoloV4-YoloV5/

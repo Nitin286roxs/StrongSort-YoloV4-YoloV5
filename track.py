@@ -3,9 +3,9 @@
 line = [(630,360), (600,950)]
 #ROI for Bilboard
 #ROI for 1280, 720
-polygon_roi = [[435,130], [775,125], [1020,720], [210,720]]
+#polygon_roi = [[435,130], [775,125], [1020,720], [210,720]]
 #ROI for 1920 , 1080 
-#polygon_roi = [[750,425], [1295,425], [1475,1290], [500,1290]]
+polygon_roi = [[750,425], [1295,425], [1475,1290], [500,1290]]
 #polygon_roi = [[770,330],[1705,330],[1705, 1290], [770, 1290]]
 MODEL_MEAN_VALUES = (78.4263377603, 87.7689143744, 114.895847746)
 genderList = ['Male', 'Female']
@@ -31,6 +31,14 @@ from pathlib import Path
 import torch
 import torch.backends.cudnn as cudnn
 import json
+import math
+import random
+
+from numpy import linalg as LA
+import cv2
+from scipy.spatial import distance
+from openvino.inference_engine import IECore
+
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # yolov5 strongsort root directory
 WEIGHTS = ROOT / 'weights'
@@ -41,6 +49,11 @@ if str(ROOT / 'yolov5') not in sys.path:
     sys.path.append(str(ROOT / 'yolov5'))  # add yolov5 ROOT to PATH
 if str(ROOT / 'strong_sort') not in sys.path:
     sys.path.append(str(ROOT / 'strong_sort'))  # add strong_sort ROOT to PATH
+
+#setting path for gaze estimation
+if str(ROOT / 'gaze_estimation') not in sys.path:
+    sys.path.append(str(ROOT / 'gaze_estimation'))  # add strong_sort ROOT to PATH
+
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 import logging
@@ -59,6 +72,7 @@ from yolov5.utils.torch_utils import select_device, time_sync
 from yolov5.utils.plots import Annotator, colors, save_one_box
 from strong_sort.utils.parser import get_config
 from strong_sort.strong_sort import StrongSORT
+from gaze_estimation import get_eye_box
 #TODO Adding api Layer
 from extended_apilayer import ExtApiLayer, add_method
 
@@ -475,8 +489,9 @@ def run(objyaml):
     augment = False  # augmented inference
     visualize = False  # visualize features
     update = False  # update all models
-    #project = ROOT / 'runs/track'  # save results to project/name
-    project = '/app/test/'  # save results to project/name
+    print(f"objyaml.project: {objyaml.project}")
+    project = "/app/"+objyaml.project  # save results to project/name
+    #project = '/app/test/'  # save results to project/name
     name = 'exp'  # save results to project/name
     exist_ok = False  # existing project/name ok, do not increment
     line_thickness = 3  # bounding box thickness (pixels)
@@ -488,7 +503,8 @@ def run(objyaml):
     model_version = objyaml.model_version #yolo model-type yolov4 or v5
     cfg = objyaml.cfg #Original cfg file if model type is yolov4
     fps = objyaml.fps #Input framesrate
-    #usecase = objyaml.usecase #POC UseCase
+    usecase = objyaml.usecase #POC UseCase
+    eye_model_type = objyaml.eye_model_type
     #source = str(objyaml.source)
     save_img = not nosave and not source.endswith('.txt')  # save inference images
     is_file = Path(source).suffix[1:] in (VID_FORMATS)
@@ -801,29 +817,33 @@ def run(objyaml):
                                 gender = genderList[genderPreds[0].argmax()]
                                 genderConf = genderPreds[0].max()
                                 #Adding grayscaled face patch to original image
-                                img0_gamma = im0.copy()
-                                img0_gamma[int(max(0,bboxes[1])):int(min(bboxes[3],im0.shape[0]-1)),int(max(0,bboxes[0])):int(min(bboxes[2], im0.shape[1]-1))] = face_gamma
-                                frame_gray = cv2.cvtColor(img0_gamma, cv2.COLOR_BGR2GRAY)
-                                frame_gray = cv2.equalizeHist(frame_gray)
-                                faceROI = frame_gray[int(max(0,bboxes[1])):int(min(bboxes[3],im0.shape[0]-1)),int(max(0,bboxes[0])):int(min(bboxes[2], im0.shape[1]-1))]
-                                #if True:#dump_gamma_corrected:
-                                #    cv2.imwrite(f"/WS/gamma_corrected/{count}.jpg", face)
-                                #    cv2.imwrite(f"/WS/gamma_corrected/{count}_greyscale.jpg", face_temp_gray)
-                                #    cv2.imwrite(f"/WS/gamma_corrected/{count}_gamma.jpg", face_gamma)
-                                #    cv2.imwrite(f"/WS/gamma_corrected/{count}_org_full.jpg", im0)
-                                #    cv2.imwrite(f"/WS/gamma_corrected/{count}_gamma_full.jpg", img0_gamma)
-                                eyes = eyes_cascade.detectMultiScale(faceROI,1.3, 5)
-                                #print(f"eyes: {eyes}")
-                                if len(eyes):
-                                    is_eye_visible = True
-                                else:
-                                    is_eye_visible = False
-                                for (x2,y2,w2,h2) in eyes:
-                                    eye_center = (int(bboxes[0] + x2 + w2//2), int(bboxes[1] + y2 + h2//2))
-                                    radius = int(round((w2 + h2)*0.25))
-                                    #print(f"eye_center: {eye_center}")
-                                    #print(f"eyes radius: {radius}")
-                                    im0 = cv2.circle(im0, eye_center, radius, (255, 255, 0 ), 4)
+                                if eye_model_type == "cascade":
+                                    img0_gamma = im0.copy()
+                                    img0_gamma[int(max(0,bboxes[1])):int(min(bboxes[3],im0.shape[0]-1)),int(max(0,bboxes[0])):int(min(bboxes[2], im0.shape[1]-1))] = face_gamma
+                                    frame_gray = cv2.cvtColor(img0_gamma, cv2.COLOR_BGR2GRAY)
+                                    frame_gray = cv2.equalizeHist(frame_gray)
+                                    faceROI = frame_gray[int(max(0,bboxes[1])):int(min(bboxes[3],im0.shape[0]-1)),int(max(0,bboxes[0])):int(min(bboxes[2], im0.shape[1]-1))]
+                                    #if True:#dump_gamma_corrected:
+                                    #    cv2.imwrite(f"/WS/gamma_corrected/{count}.jpg", face)
+                                    #    cv2.imwrite(f"/WS/gamma_corrected/{count}_greyscale.jpg", face_temp_gray)
+                                    #    cv2.imwrite(f"/WS/gamma_corrected/{count}_gamma.jpg", face_gamma)
+                                    #    cv2.imwrite(f"/WS/gamma_corrected/{count}_org_full.jpg", im0)
+                                    #    cv2.imwrite(f"/WS/gamma_corrected/{count}_gamma_full.jpg", img0_gamma)
+                                    eyes = eyes_cascade.detectMultiScale(faceROI,1.3, 5)
+                                    #print(f"eyes: {eyes}")
+                                    if len(eyes):
+                                        is_eye_visible = True
+                                    else:
+                                        is_eye_visible = False
+                                    for (x2,y2,w2,h2) in eyes:
+                                        eye_center = (int(bboxes[0] + x2 + w2//2), int(bboxes[1] + y2 + h2//2))
+                                        radius = int(round((w2 + h2)*0.25))
+                                        #print(f"eye_center: {eye_center}")
+                                        #print(f"eyes radius: {radius}")
+                                        im0 = cv2.circle(im0, eye_center, radius, (255, 255, 0 ), 4)
+                                if eye_model_type == "openvino":
+                                    im0, is_eye_visible = get_eye_box(bboxes,im0)
+
                             if save_txt:
                                 # to MOT format
                                 bbox_left = output[0]
@@ -1039,7 +1059,8 @@ def parse_opt():
     parser.add_argument('--model-version', help='yolov4 or yolov5')
     parser.add_argument('--cfg', default="yolov4-csp-custom.cfg", help='yolov4 cfg file')
     parser.add_argument('--fps', default="5", help='video fps')
-    #parser.add_argument('--usecase', help='[Billboard, TyreCounting]')
+    parser.add_argument('--eye-model-type', default="cascade", help='Eye detection model type [cascade, openvino]')
+    parser.add_argument('--usecase', help='[Billboard, TyreCounting]')
     opt = parser.parse_args()
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand
     print_args(vars(opt))
