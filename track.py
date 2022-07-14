@@ -323,8 +323,10 @@ def process_frame(im0, stride, nr_sources, USECASE,  model, names, device, half,
 
         if det is not None and len(det):
             # Rescale boxes from img_size to im0 size
+            print(f"Detection box before scaling: {det}")
             det[:, :4] = scale_coords(im.shape[2:], det[:, :4], im0.shape).round()
-
+            print(f"Detection box after scaling: {det}")
+            
             # Print results
             for c in det[:, -1].unique():
                 n = (det[:, -1] == c).sum()  # detections per class
@@ -347,7 +349,7 @@ def process_frame(im0, stride, nr_sources, USECASE,  model, names, device, half,
             # draw boxes for visualization
             if len(outputs[i]) > 0:
                 for j, (output, conf) in enumerate(zip(outputs[i], confs)):
-    
+                    print(f"Detection box after tracker: {output}")
                     bboxes = output[0:4]
                     #print(f"yolo deepsort co-ord : {bboxes}")
                     id = output[4]
@@ -543,7 +545,7 @@ def run(objyaml):
                 genderNet.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
                 genderNet.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
                 print('Using GPU device.')
-    else:
+    elif model_version == "yolov4":
         model = Darknet(cfg, imgsz).cuda()
         try:
             print(f"yolo_weights: {yolo_weights[0]}")
@@ -560,6 +562,8 @@ def run(objyaml):
         model.to(device).eval()
         if half:
             model.half()  # to FP16
+    else:
+        names = "head"
     #imgsz = check_img_size(imgsz, s=stride)  # check image size
 
     # initialize StrongSORT
@@ -670,8 +674,11 @@ def run(objyaml):
             print("I'm Here!!")
             if model_version=="yolov5":
                 dataset = LoadImages(polygon_roi, source, img_size=imgsz, stride=stride, auto=pt)
-            else:
+            elif model_version=="yolov4":
                 save_img = True
+                dataset = LoadImagesV4(polygon_roi, source, img_size=imgsz, auto_size=64)
+            elif model_version=="openvino":
+                #imgsz = (384,672)
                 dataset = LoadImagesV4(polygon_roi, source, img_size=imgsz, auto_size=64)
             nr_sources = 1
         vid_path, vid_writer, txt_path = [None] * nr_sources, [None] * nr_sources, [None] * nr_sources
@@ -694,11 +701,12 @@ def run(objyaml):
             print(f"im shape: {(im[0]).shape}")
             print(f"im0 shape: {(im0s[0]).shape}")
             t1 = time_sync()
-            im = torch.from_numpy(im).to(device)
-            im = im.half() if half else im.float()  # uint8 to fp16/32
-            im /= 255.0  # 0 - 255 to 0.0 - 1.0
-            if len(im.shape) == 3:
-                im = im[None]  # expand for batch dim
+            if model_version != "openvino": 
+                im = torch.from_numpy(im).to(device)
+                im = im.half() if half else im.float()  # uint8 to fp16/32
+                im /= 255.0  # 0 - 255 to 0.0 - 1.0
+                if len(im.shape) == 3:
+                    im = im[None]  # expand for batch dim
             t2 = time_sync()
             dt[0] += t2 - t1
 
@@ -706,19 +714,23 @@ def run(objyaml):
             visualize = increment_path(save_dir / Path(path[0]).stem, mkdir=True) if visualize else False
             if model_version=="yolov5":
                 pred = model(im, augment=augment, visualize=visualize)
-            else:
+            elif model_version=="yolov4":
                 pred = model(im, augment=augment)
+            else:
+                im0s, pred, is_eye_visible = get_eye_box(None, im0s)
+                print(f"openvino face detection: {pred}")
             t3 = time_sync()
             dt[1] += t3 - t2
 
             # Apply NMS
             if model_version=="yolov5":
                 pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
-            else:
+            elif model_version=="yolov4":
                 pred = non_max_suppressionV4(pred, conf_thres, iou_thres, classes, agnostic_nms)
             dt[2] += time_sync() - t3
-
+            print(f"yolo detection: {pred}")
             # Process detections
+            im0 = im0s.copy()
             for i, det in enumerate(pred):  # detections per image
                 seen += 1
                 if webcam:  # nr_sources >= 1
@@ -742,7 +754,8 @@ def run(objyaml):
                 curr_frames[i] = im0
 
                 txt_path = str(save_dir / 'tracks' / txt_file_name)  # im.txt
-                s += '%gx%g ' % im.shape[2:]  # print string
+                print(f"im.shape[2:]: {im.shape[2:]}")
+                #s += '%gx%g ' % im.shape[2:]  # print string
                 gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
                 imc = im0.copy() if save_crop else im0  # for save_crop
                 #im0 = cv2.rectangle(im0, (roi[0], roi[1]), (roi[2], roi[3]), (0, 0, 255), 2)
@@ -768,12 +781,14 @@ def run(objyaml):
 
                 if det is not None and len(det):
                     # Rescale boxes from img_size to im0 size
-                    det[:, :4] = scale_coords(im.shape[2:], det[:, :4], im0.shape).round()
-
+                    print(f"detection box before scaling: {det}")
+                    if model_version!="openvino": 
+                        det[:, :4] = scale_coords(im.shape[2:], det[:, :4], im0.shape).round()
+                    print(f"detection box after scaling: {det}")
                     # Print results
                     for c in det[:, -1].unique():
                         n = (det[:, -1] == c).sum()  # detections per class
-                        s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
+                        #s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
 
                     xywhs = xyxy2xywh(det[:, 0:4])
                     # Write results
@@ -782,7 +797,9 @@ def run(objyaml):
                     #print(f"yolo co-ord : {xywhs}")
                     confs = det[:, 4]
                     clss = det[:, 5]
-
+                    print("xywhs:", f"{xywhs.cpu()}")
+                    print("confs:", f"{confs.cpu()}")
+                    print("clss:", f"{clss.cpu()}")
                     # pass detections to strongsort
                     t4 = time_sync()
                     outputs[i] = strongsort_list[i].update(xywhs.cpu(), confs.cpu(), clss.cpu(), im0)
@@ -792,7 +809,7 @@ def run(objyaml):
                     # draw boxes for visualization
                     if len(outputs[i]) > 0:
                         for j, (output, conf) in enumerate(zip(outputs[i], confs)):
-    
+                            print(f"detection box after tracking: {output}")
                             bboxes = output[0:4]
                             #print(f"yolo deepsort co-ord : {bboxes}")
                             id = output[4]
@@ -842,7 +859,7 @@ def run(objyaml):
                                         #print(f"eyes radius: {radius}")
                                         im0 = cv2.circle(im0, eye_center, radius, (255, 255, 0 ), 4)
                                 if eye_model_type == "openvino":
-                                    im0, is_eye_visible = get_eye_box(bboxes,im0)
+                                    im0, pred, is_eye_visible = get_eye_box(bboxes,im0)
 
                             if save_txt:
                                 # to MOT format
@@ -939,7 +956,7 @@ def run(objyaml):
                                 if save_crop:
                                     txt_file_name = txt_file_name if (isinstance(path, list) and len(path) > 1) else ''
                                     save_one_box(bboxes, imc, file=save_dir / 'crops' / txt_file_name / names[c] / f'{id}' / f'{p.stem}.jpg', BGR=True)
-                    LOGGER.info(f'{s}Done. YOLO:({t3 - t2:.3f}s), StrongSORT:({t5 - t4:.3f}s)')
+                    LOGGER.info(f'Done. YOLO:({t3 - t2:.3f}s), StrongSORT:({t5 - t4:.3f}s)')
 
                 else:
                     strongsort_list[i].increment_ages()

@@ -1,7 +1,7 @@
 import sys
 import math
 import random
-
+import torch
 import numpy as np
 from numpy import linalg as LA
 import cv2
@@ -120,6 +120,8 @@ def get_eye_box(face_box, img):
     res_det = exec_net_det.infer(inputs={input_name_det: img1})     # Detect faces
 
     gaze_lines = []
+    is_eye_visible = False
+    pred = [] # res_det[out_name_det][0][0]
     for obj in res_det[out_name_det][0][0]: # obj = [ image_id, label, conf, xmin, ymin, xmax, ymax ]
         if obj[2] > 0.75:                                                  # Confidence > 75% 
             xmin = abs(int(obj[3] * img.shape[1]))
@@ -131,6 +133,7 @@ def get_eye_box(face_box, img):
             #xmax = int(face_box[2]) #abs(int(obj[5] * img.shape[1]))
             #ymax = int(face_box[3]) #abs(int(obj[6] * img.shape[0]))
             #class_id = int(obj[1])
+            pred.append([xmin, ymin, xmax, ymax, obj[2], 1])
             print(f"xmin: {xmin}, ymin: {ymin}, xmax:{xmax} and ymax:{ymax}")
             face=img[ymin:ymax,xmin:xmax]                                  # Crop the face image
             
@@ -154,7 +157,7 @@ def get_eye_box(face_box, img):
             eye_centers = [ [ int(((lm[0][_X]+lm[1][_X])/2 * face.shape[1])), int(((lm[0][_Y]+lm[1][_Y])/2 * face.shape[0])) ], 
                                          [ int(((lm[3][_X]+lm[2][_X])/2 * face.shape[1])), int(((lm[3][_Y]+lm[2][_Y])/2 * face.shape[0])) ] ]  # eye center coordinate in the cropped face image
             if eye_sizes[0]<4 or eye_sizes[1]<4:
-                return img, False
+                return img, [torch.Tensor(pred)], False
 
             ratio = 0.7
             eyes = []
@@ -171,7 +174,7 @@ def get_eye_box(face_box, img):
                 # Draw eye boundary boxes
                 if boundary_box_flag == True:
                     cv2.rectangle(img, (x1+xmin,y1+ymin), (x2+xmin,y2+ymin), (0,255,0), 2)
-        return img, is_eye_visible
+        return img, [torch.Tensor(pred)], is_eye_visible
 
 def main():
 
