@@ -5,7 +5,8 @@ line = [(630,360), (600,950)]
 #ROI for 1280, 720
 #polygon_roi = [[435,130], [775,125], [1020,720], [210,720]]
 #ROI for 1920 , 1080 
-polygon_roi = [[750,425], [1295,425], [1475,1290], [500,1290]]
+#polygon_roi = [[750,425], [1295,425], [1475,1290], [500,1290]] #OLD View
+polygon_roi = [[785,170], [1190,170], [1453,1080], [605,1080]] #OLD View
 #polygon_roi = [[770,330],[1705,330],[1705, 1290], [770, 1290]]
 MODEL_MEAN_VALUES = (78.4263377603, 87.7689143744, 114.895847746)
 genderList = ['Male', 'Female']
@@ -351,6 +352,7 @@ def process_frame(im0, stride, nr_sources, USECASE,  model, names, device, half,
                 for j, (output, conf) in enumerate(zip(outputs[i], confs)):
                     print(f"Detection box after tracker: {output}")
                     bboxes = output[0:4]
+                    bboxes = [output[0], output[1]+20, output[2], output[3]]
                     #print(f"yolo deepsort co-ord : {bboxes}")
                     id = output[4]
                     cls = output[5]
@@ -717,8 +719,13 @@ def run(objyaml):
             elif model_version=="yolov4":
                 pred = model(im, augment=augment)
             else:
-                im0s, pred, is_eye_visible = get_eye_box(None, im0s)
-                print(f"openvino face detection: {pred}")
+                isFace = False
+                roi = [polygon_roi[0][0], polygon_roi[0][1],\
+                       polygon_roi[2][0], polygon_roi[2][1]]
+                s_time = time.time()*1000
+                im0s, pred, is_eye_visible = get_eye_box([], im0s, isFace, roi)
+                e_time = time.time()*1000
+                print(f"openvino face detection process time: {e_time- s_time}")
             t3 = time_sync()
             dt[1] += t3 - t2
 
@@ -728,9 +735,10 @@ def run(objyaml):
             elif model_version=="yolov4":
                 pred = non_max_suppressionV4(pred, conf_thres, iou_thres, classes, agnostic_nms)
             dt[2] += time_sync() - t3
-            print(f"yolo detection: {pred}")
+            #print(f"yolo detection: {pred}")
             # Process detections
             im0 = im0s.copy()
+            #is_eye_visible = False 
             for i, det in enumerate(pred):  # detections per image
                 seen += 1
                 if webcam:  # nr_sources >= 1
@@ -781,10 +789,10 @@ def run(objyaml):
 
                 if det is not None and len(det):
                     # Rescale boxes from img_size to im0 size
-                    print(f"detection box before scaling: {det}")
+                    #print(f"detection box before scaling: {det}")
                     if model_version!="openvino": 
                         det[:, :4] = scale_coords(im.shape[2:], det[:, :4], im0.shape).round()
-                    print(f"detection box after scaling: {det}")
+                    #print(f"detection box after scaling: {det}")
                     # Print results
                     for c in det[:, -1].unique():
                         n = (det[:, -1] == c).sum()  # detections per class
@@ -797,9 +805,9 @@ def run(objyaml):
                     #print(f"yolo co-ord : {xywhs}")
                     confs = det[:, 4]
                     clss = det[:, 5]
-                    print("xywhs:", f"{xywhs.cpu()}")
-                    print("confs:", f"{confs.cpu()}")
-                    print("clss:", f"{clss.cpu()}")
+                    #print("xywhs:", f"{xywhs.cpu()}")
+                    #print("confs:", f"{confs.cpu()}")
+                    #print("clss:", f"{clss.cpu()}")
                     # pass detections to strongsort
                     t4 = time_sync()
                     outputs[i] = strongsort_list[i].update(xywhs.cpu(), confs.cpu(), clss.cpu(), im0)
@@ -809,13 +817,15 @@ def run(objyaml):
                     # draw boxes for visualization
                     if len(outputs[i]) > 0:
                         for j, (output, conf) in enumerate(zip(outputs[i], confs)):
-                            print(f"detection box after tracking: {output}")
+                            #print(f"detection box after tracking: {output}")
                             bboxes = output[0:4]
+                            bboxes = [output[0], output[1], output[2], output[3]]
                             #print(f"yolo deepsort co-ord : {bboxes}")
                             id = output[4]
                             cls = output[5]
                             if isEyeDetection and isGenderClassification:
                                 face = im0[int(max(0,bboxes[1])):int(min(bboxes[3],im0.shape[0]-1)),int(max(0,bboxes[0])):int(min(bboxes[2], im0.shape[1]-1))]
+                                bboxes
                                 #TODO 
                                 '''
                                 Applying gamma correction on face.
@@ -834,32 +844,36 @@ def run(objyaml):
                                 gender = genderList[genderPreds[0].argmax()]
                                 genderConf = genderPreds[0].max()
                                 #Adding grayscaled face patch to original image
-                                if eye_model_type == "cascade":
-                                    img0_gamma = im0.copy()
-                                    img0_gamma[int(max(0,bboxes[1])):int(min(bboxes[3],im0.shape[0]-1)),int(max(0,bboxes[0])):int(min(bboxes[2], im0.shape[1]-1))] = face_gamma
-                                    frame_gray = cv2.cvtColor(img0_gamma, cv2.COLOR_BGR2GRAY)
-                                    frame_gray = cv2.equalizeHist(frame_gray)
-                                    faceROI = frame_gray[int(max(0,bboxes[1])):int(min(bboxes[3],im0.shape[0]-1)),int(max(0,bboxes[0])):int(min(bboxes[2], im0.shape[1]-1))]
-                                    #if True:#dump_gamma_corrected:
-                                    #    cv2.imwrite(f"/WS/gamma_corrected/{count}.jpg", face)
-                                    #    cv2.imwrite(f"/WS/gamma_corrected/{count}_greyscale.jpg", face_temp_gray)
-                                    #    cv2.imwrite(f"/WS/gamma_corrected/{count}_gamma.jpg", face_gamma)
-                                    #    cv2.imwrite(f"/WS/gamma_corrected/{count}_org_full.jpg", im0)
-                                    #    cv2.imwrite(f"/WS/gamma_corrected/{count}_gamma_full.jpg", img0_gamma)
-                                    eyes = eyes_cascade.detectMultiScale(faceROI,1.3, 5)
-                                    #print(f"eyes: {eyes}")
-                                    if len(eyes):
-                                        is_eye_visible = True
-                                    else:
-                                        is_eye_visible = False
-                                    for (x2,y2,w2,h2) in eyes:
-                                        eye_center = (int(bboxes[0] + x2 + w2//2), int(bboxes[1] + y2 + h2//2))
-                                        radius = int(round((w2 + h2)*0.25))
-                                        #print(f"eye_center: {eye_center}")
-                                        #print(f"eyes radius: {radius}")
-                                        im0 = cv2.circle(im0, eye_center, radius, (255, 255, 0 ), 4)
-                                if eye_model_type == "openvino":
-                                    im0, pred, is_eye_visible = get_eye_box(bboxes,im0)
+                                #if eye_model_type == "cascade":
+                                #    img0_gamma = im0.copy()
+                                #    img0_gamma[int(max(0,bboxes[1])):int(min(bboxes[3],im0.shape[0]-1)),int(max(0,bboxes[0])):int(min(bboxes[2], im0.shape[1]-1))] = face_gamma
+                                #    frame_gray = cv2.cvtColor(img0_gamma, cv2.COLOR_BGR2GRAY)
+                                #    frame_gray = cv2.equalizeHist(frame_gray)
+                                #    faceROI = frame_gray[int(max(0,bboxes[1])):int(min(bboxes[3],im0.shape[0]-1)),int(max(0,bboxes[0])):int(min(bboxes[2], im0.shape[1]-1))]
+                                #    #if True:#dump_gamma_corrected:
+                                #    #    cv2.imwrite(f"/WS/gamma_corrected/{count}.jpg", face)
+                                #    #    cv2.imwrite(f"/WS/gamma_corrected/{count}_greyscale.jpg", face_temp_gray)
+                                #    #    cv2.imwrite(f"/WS/gamma_corrected/{count}_gamma.jpg", face_gamma)
+                                #    #    cv2.imwrite(f"/WS/gamma_corrected/{count}_org_full.jpg", im0)
+                                #    #    cv2.imwrite(f"/WS/gamma_corrected/{count}_gamma_full.jpg", img0_gamma)
+                                #    eyes = eyes_cascade.detectMultiScale(faceROI,1.3, 5)
+                                #    #print(f"eyes: {eyes}")
+                                #    if len(eyes):
+                                #        is_eye_visible = True
+                                #    else:
+                                #        is_eye_visible = False
+                                #    for (x2,y2,w2,h2) in eyes:
+                                #        eye_center = (int(bboxes[0] + x2 + w2//2), int(bboxes[1] + y2 + h2//2))
+                                #        radius = int(round((w2 + h2)*0.25))
+                                #        #print(f"eye_center: {eye_center}")
+                                #        #print(f"eyes radius: {radius}")
+                                #        im0 = cv2.circle(im0, eye_center, radius, (255, 255, 0 ), 4)
+                                #if eye_model_type == "openvino":
+                                #    isFace = True
+                                #    s_time = time.time()*1000
+                                #    im0, pred, is_eye_visible = get_eye_box(bboxes,im0, isFace)
+                                #    e_time = time.time()*1000
+                                #    print(f"Getting eyebox from openvino: {e_time-s_time}")
 
                             if save_txt:
                                 # to MOT format
@@ -879,9 +893,10 @@ def run(objyaml):
                                                      polygon_roi[2][0], polygon_roi[2][1]]
                                 #iou_conf = iou_check(bboxes, roi)
                                 label = None if hide_labels else (f'{id} {names[c]}' if hide_conf else \
-                                    (f'{id} {conf:.2f}' if hide_class else f'{id} {names[c]} {conf:.2f}'))
+                                    (f'{id} {conf:.2f}' if hide_class else f'{id} Face {conf:.2f}'))
                                 iou_conf = iou_check(bboxes, roi)
-                                #print(f"iou_conf: {iou_conf}")
+                                print(f"iou_conf: {iou_conf}")
+                                print(f"is_eye_visible: {is_eye_visible}")
                                 if iou_conf > 0.5:
                                     if USECASE == "Billboard":
                                         annotator.box_label_billboard(bboxes, gender, genderConf, is_eye_visible, label, color=colors(c, True))

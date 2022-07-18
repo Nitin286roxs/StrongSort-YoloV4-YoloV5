@@ -7,6 +7,7 @@ save-vid: True                                          # save confidences in --
 model-version: "openvino"                                   # yolo model-type yolov4 or v5
 eye-model-type: "openvino"
 cfg: "yolov4/models/yolov4-csp-custom.cfg"              # only Yolov4 use this cfg, for yolov5 can be none
+usecase: "Billboard"
 device: 0                                               # device
 fps: 10                                                 # output fps
 imgsz: [640,640]
