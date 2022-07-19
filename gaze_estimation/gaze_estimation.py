@@ -12,11 +12,14 @@ model_det  = 'face-detection-adas-0001'
 model_hp   = 'head-pose-estimation-adas-0001'
 model_gaze = 'gaze-estimation-adas-0002'
 model_lm   = 'facial-landmarks-35-adas-0002'
+model_age_gender = 'age-gender-recognition-retail-0013'
 
 model_det  = './intel/'+model_det +'/FP16/'+model_det
 model_hp   = './intel/'+model_hp  +'/FP16/'+model_hp
 model_gaze = './intel/'+model_gaze+'/FP16/'+model_gaze
 model_lm   = './intel/'+model_lm  +'/FP16/'+model_lm
+model_age_gender   = './intel/'+model_age_gender  +'/FP16/'+model_age_gender
+
 
 _N = 0
 _C = 1
@@ -117,6 +120,14 @@ def get_eye_box(face_box, img, isFace, roi):
     exec_net_lm    = ie.load_network(network=net_lm, device_name='CPU', num_requests=1)
     del net_lm
 
+    ## Preperation for loading age-gender-model
+    DECT_TYPES = ["female", "male"]
+    net_age_gender  = ie.read_network(model=model_age_gender+'.xml', weights=model_age_gender+'.bin')
+    input_name_age_gender  = next(iter(net_age_gender.input_info))
+    input_shape_age_gender = net_age_gender.input_info[input_name_age_gender].tensor_desc.dims
+    out_name_age_gender = next(iter(net_age_gender.outputs))
+    exec_net_age_gender = ie.load_network(network=net_age_gender, device_name='CPU', num_requests=1)
+    del net_age_gender
     ## Preparation for headpose detection
     #net_hp = ie.read_network(model=model_hp+'.xml', weights=model_hp+'.bin')
     #input_name_hp  = next(iter(net_hp.input_info))                          # Input blob name
@@ -136,6 +147,7 @@ def get_eye_box(face_box, img, isFace, roi):
     pred = [] # res_det[out_name_det][0][0]
     iou_conf = 0.0
     face = None
+    xmin, ymin, xmax, ymax = None, None, None, None
     if not isFace:
         img1 = cv2.resize(img, (input_shape_det[_W], input_shape_det[_H]))
         img1 = img1.transpose((2, 0, 1))                                # Change data layout from HWC to CHW
@@ -163,6 +175,23 @@ def get_eye_box(face_box, img, isFace, roi):
         #print(f"xmin: {xmin}, ymin: {ymin}, xmax:{xmax} and ymax:{ymax}")
         iou_conf = iou_check(face_box, roi)
         face=img[ymin:ymax,xmin:xmax]                                  # Crop the face image
+    #TODO gender Calculation
+    age_gender_label = None
+    if (xmin != None and ymin != None) and (xmax != None and ymax != None):
+        xmin_, ymin_, xmax_, ymax_ = xmin, ymin-10, xmax, ymax+10
+        face_=img[ymin_:ymax_,xmin_:xmax_]
+        try:
+            face1_=cv2.resize(face_, (input_shape_age_gender[_W], input_shape_age_gender[_H]))
+        except cv2.error as e:
+            return img, [torch.Tensor(pred)], False, age_gender_label
+        face1_=face1_.transpose((2,0,1))
+        face1_=face1_.reshape(input_shape_age_gender)
+        res_age_gender = exec_net_age_gender.infer(inputs={input_name_age_gender: face1_})
+        #dect_type = DECT_TYPES[output[1]]
+        #age = res_age_gender['age_conv3'].flatten()[0]*100
+        gender = res_age_gender['prob'].flatten()
+        gender_pred = np.argmax(gender)
+        age_gender_label = f"{DECT_TYPES[gender_pred]}"
     if iou_conf > 0.1:        
         # Find facial landmarks (to find eyes)
         face1=cv2.resize(face, (input_shape_lm[_W], input_shape_lm[_H]))
@@ -189,7 +218,7 @@ def get_eye_box(face_box, img, isFace, roi):
                           int(((lm[3][_Y]+lm[2][_Y])/2 * face.shape[0])) ]\
                       ]  # eye center coordinate in the cropped face image
         if eye_sizes[0]<4 or eye_sizes[1]<4:
-            return img, [torch.Tensor(pred)], False
+            return img, [torch.Tensor(pred)], False, age_gender_label
 
         ratio = 0.7
         eyes = []
@@ -205,7 +234,7 @@ def get_eye_box(face_box, img, isFace, roi):
             # Draw eye boundary boxes
             if boundary_box_flag == True:
                 cv2.rectangle(img, (x1+xmin,y1+ymin), (x2+xmin,y2+ymin), (0,255,0), 2)
-    return img, [torch.Tensor(pred)], is_eye_visible
+    return img, [torch.Tensor(pred)], is_eye_visible, age_gender_label
 
 def main():
 

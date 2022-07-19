@@ -6,7 +6,8 @@ line = [(630,360), (600,950)]
 #polygon_roi = [[435,130], [775,125], [1020,720], [210,720]]
 #ROI for 1920 , 1080 
 #polygon_roi = [[750,425], [1295,425], [1475,1290], [500,1290]] #OLD View
-polygon_roi = [[785,170], [1190,170], [1453,1080], [605,1080]] #OLD View
+#polygon_roi = [[785,170], [1190,170], [1453,1080], [605,1080]] #New View
+polygon_roi = [[0,0], [1920,0], [1920,1080], [0, 1080]]
 #polygon_roi = [[770,330],[1705,330],[1705, 1290], [770, 1290]]
 MODEL_MEAN_VALUES = (78.4263377603, 87.7689143744, 114.895847746)
 genderList = ['Male', 'Female']
@@ -689,6 +690,7 @@ def run(objyaml):
         unique_tyre_centroid = {}
         unique_tyre = []
         unique_person_seen_bilboard = []
+        age_gender_label = None
         # Run tracking
         if model_version=="yolov5":
             model.warmup(imgsz=(1 if pt else nr_sources, 3, *imgsz))  # warmup
@@ -723,7 +725,7 @@ def run(objyaml):
                 roi = [polygon_roi[0][0], polygon_roi[0][1],\
                        polygon_roi[2][0], polygon_roi[2][1]]
                 s_time = time.time()*1000
-                im0s, pred, is_eye_visible = get_eye_box([], im0s, isFace, roi)
+                im0s, pred, is_eye_visible, age_gender_label = get_eye_box([], im0s, isFace, roi)
                 e_time = time.time()*1000
                 print(f"openvino face detection process time: {e_time- s_time}")
             t3 = time_sync()
@@ -838,11 +840,16 @@ def run(objyaml):
                                 # do gamma correction
                                 face_gamma = adjust_gamma(face, gamma)
                                 #print(face.shape)
-                                blob = cv2.dnn.blobFromImage(face, 1.0, (227, 227), MODEL_MEAN_VALUES, swapRB=False)
-                                genderNet.setInput(blob)
-                                genderPreds = genderNet.forward()
-                                gender = genderList[genderPreds[0].argmax()]
-                                genderConf = genderPreds[0].max()
+                                gender = None
+                                genderConf = None
+                                if model_version!="openvino":
+                                    blob = cv2.dnn.blobFromImage(face, 1.0, (227, 227), MODEL_MEAN_VALUES, swapRB=False)
+                                    genderNet.setInput(blob)
+                                    genderPreds = genderNet.forward()
+                                    gender = genderList[genderPreds[0].argmax()]
+                                    genderConf = genderPreds[0].max()
+                                else:
+                                    gender = age_gender_label 
                                 #Adding grayscaled face patch to original image
                                 #if eye_model_type == "cascade":
                                 #    img0_gamma = im0.copy()
