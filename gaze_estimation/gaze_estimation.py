@@ -81,23 +81,50 @@ Gaze estimation demo
 's': Spark mode on/off
 'b': Boundary box on/off
 """)
+def iou_check(box_obj, box_roi):
+    from shapely.geometry import Polygon
+    box_obj = [(box_obj[0], box_obj[1]),(box_obj[2],box_obj[1]),(box_obj[2],box_obj[3]), (box_obj[0], box_obj[3])]
+    polygon1 = Polygon(box_obj)
+    polygon2 = Polygon(box_roi)
+    intersect = polygon1.intersection(polygon2).area
+    union = polygon1.area + polygon2.area - intersect #polygon1.union(polygon2).area
+    iou = intersect / polygon1.area
+    return iou  # iou = 0.5
 
-#Intersection over union check for two objects
-def iou_check(boxA, boxB):
-    xA = max(boxA[0], boxB[0])
-    yA = max(boxA[1], boxB[1])
-    xB = min(boxA[2], boxB[2])
-    yB = min(boxA[3], boxB[3])
-    # compute the area of intersection rectangle
-    interArea = max(0, xB - xA + 1) * max(0, yB - yA + 1)
-    # compute the area of both the prediction and ground-truth
-    # rectangles
-    boxAArea = (boxA[2] - boxA[0] + 1) * (boxA[3] - boxA[1] + 1)
-    boxBArea = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
-    # compute the intersection over union by taking the intersection
-    # area and dividing it by the sum of prediction + ground-truth
-    # areas - the interesection area
-    return interArea / float(boxAArea) #+ boxBArea - interArea)
+def get_gender(head_box, img):
+    ie = IECore()
+    print(f"head_box: {head_box}")
+    ## Preperation for loading age-gender-model
+    DECT_TYPES = ["female", "male"]
+    net_age_gender  = ie.read_network(model=model_age_gender+'.xml', weights=model_age_gender+'.bin')
+    input_name_age_gender  = next(iter(net_age_gender.input_info))
+    input_shape_age_gender = net_age_gender.input_info[input_name_age_gender].tensor_desc.dims
+    out_name_age_gender = next(iter(net_age_gender.outputs))
+    exec_net_age_gender = ie.load_network(network=net_age_gender, device_name='CPU', num_requests=1)
+    del net_age_gender
+    #TODO gender Calculation
+    age_gender_label = None
+    xmin = int(head_box[0]) #abs(int(obj[3] * img.shape[1]))
+    ymin = int(head_box[1]) #abs(int(obj[4] * img.shape[0]))
+    xmax = int(head_box[2]) #abs(int(obj[5] * img.shape[1]))
+    ymax = int(head_box[3]) #abs(int(obj[6] * img.shape[0]))
+    if (xmin != None and ymin != None) and (xmax != None and ymax != None):
+        #xmin_, ymin_, xmax_, ymax_ = xmin, ymin-10, xmax, ymax+10
+        face_=img[ymin:ymax,xmin:xmax]
+        try:
+            face1_=cv2.resize(face_, (input_shape_age_gender[_W], input_shape_age_gender[_H]))
+        except cv2.error as e:
+            return  age_gender_label
+        face1_=face1_.transpose((2,0,1))
+        face1_=face1_.reshape(input_shape_age_gender)
+        res_age_gender = exec_net_age_gender.infer(inputs={input_name_age_gender: face1_})
+        #dect_type = DECT_TYPES[output[1]]
+        #age = res_age_gender['age_conv3'].flatten()[0]*100
+        gender = res_age_gender['prob'].flatten()
+        gender_pred = np.argmax(gender)
+        age_gender_label = f"{DECT_TYPES[gender_pred]}"
+    return age_gender_label
+     
 
 def get_eye_box(face_box, img, isFace, roi):
     # Prep for face detection
@@ -120,35 +147,13 @@ def get_eye_box(face_box, img, isFace, roi):
     exec_net_lm    = ie.load_network(network=net_lm, device_name='CPU', num_requests=1)
     del net_lm
 
-    ## Preperation for loading age-gender-model
-    DECT_TYPES = ["female", "male"]
-    net_age_gender  = ie.read_network(model=model_age_gender+'.xml', weights=model_age_gender+'.bin')
-    input_name_age_gender  = next(iter(net_age_gender.input_info))
-    input_shape_age_gender = net_age_gender.input_info[input_name_age_gender].tensor_desc.dims
-    out_name_age_gender = next(iter(net_age_gender.outputs))
-    exec_net_age_gender = ie.load_network(network=net_age_gender, device_name='CPU', num_requests=1)
-    del net_age_gender
-    ## Preparation for headpose detection
-    #net_hp = ie.read_network(model=model_hp+'.xml', weights=model_hp+'.bin')
-    #input_name_hp  = next(iter(net_hp.input_info))                          # Input blob name
-    #input_shape_hp = net_hp.input_info[input_name_hp].tensor_desc.dims      # [1,3,60,60]
-    #out_name_hp    = next(iter(net_hp.outputs))                             # Output blob name
-    #out_shape_hp   = net_hp.outputs[out_name_hp].shape                      # [1,70]
-    #exec_net_hp    = ie.load_network(network=net_hp, device_name='CPU', num_requests=1)
-    #del net_hp
-
-    ## Preparation for gaze estimation
-    #net_gaze = ie.read_network(model=model_gaze+'.xml', weights=model_gaze+'.bin')
-    #input_shape_gaze  = [1, 3, 60, 60]
-    #exec_net_gaze     = ie.load_network(network=net_gaze, device_name='CPU')
-    #del net_gaze
-    #print(f"faebbox: {face_box}, img shape: {img.shape}")
     is_eye_visible = False
     pred = [] # res_det[out_name_det][0][0]
     iou_conf = 0.0
     face = None
     xmin, ymin, xmax, ymax = None, None, None, None
     if not isFace:
+        print(f"img shape: {img.shape}")
         img1 = cv2.resize(img, (input_shape_det[_W], input_shape_det[_H]))
         img1 = img1.transpose((2, 0, 1))                                # Change data layout from HWC to CHW
         img1 = img1.reshape(input_shape_det)
@@ -163,78 +168,62 @@ def get_eye_box(face_box, img, isFace, roi):
                 ymax = abs(int(obj[6] * img.shape[0]))
                 bboxes = [xmin, ymin, xmax, ymax]
                 iou_conf = iou_check(bboxes, roi)
+                if iou_conf < 0.8:
+                    return img, [torch.Tensor(pred)], False
                 face=img[ymin:ymax,xmin:xmax]                                  # Crop the face image
                 pred.append([xmin, ymin, xmax, ymax, obj[2], 1])
-    else:
-        xmin = int(face_box[0]) #abs(int(obj[3] * img.shape[1]))
-        ymin = int(face_box[1]) #abs(int(obj[4] * img.shape[0]))
-        xmax = int(face_box[2]) #abs(int(obj[5] * img.shape[1]))
-        ymax = int(face_box[3]) #abs(int(obj[6] * img.shape[0]))
-        #class_id = int(obj[1])
-        #pred.append([xmin, ymin, xmax, ymax, obj[2], 1])
-        #print(f"xmin: {xmin}, ymin: {ymin}, xmax:{xmax} and ymax:{ymax}")
-        iou_conf = iou_check(face_box, roi)
-        face=img[ymin:ymax,xmin:xmax]                                  # Crop the face image
-    #TODO gender Calculation
-    age_gender_label = None
-    if (xmin != None and ymin != None) and (xmax != None and ymax != None):
-        xmin_, ymin_, xmax_, ymax_ = xmin, ymin-10, xmax, ymax+10
-        face_=img[ymin_:ymax_,xmin_:xmax_]
-        try:
-            face1_=cv2.resize(face_, (input_shape_age_gender[_W], input_shape_age_gender[_H]))
-        except cv2.error as e:
-            return img, [torch.Tensor(pred)], False, age_gender_label
-        face1_=face1_.transpose((2,0,1))
-        face1_=face1_.reshape(input_shape_age_gender)
-        res_age_gender = exec_net_age_gender.infer(inputs={input_name_age_gender: face1_})
-        #dect_type = DECT_TYPES[output[1]]
-        #age = res_age_gender['age_conv3'].flatten()[0]*100
-        gender = res_age_gender['prob'].flatten()
-        gender_pred = np.argmax(gender)
-        age_gender_label = f"{DECT_TYPES[gender_pred]}"
-    if iou_conf > 0.1:        
-        # Find facial landmarks (to find eyes)
-        face1=cv2.resize(face, (input_shape_lm[_W], input_shape_lm[_H]))
-        face1=face1.transpose((2,0,1))
-        face1=face1.reshape(input_shape_lm)
-        res_lm = exec_net_lm.infer(inputs={input_name_lm: face1})       # Run landmark detection
-        lm=res_lm[out_name_lm][0][:8].reshape(4,2)                      #  [[left0x, left0y], [left1x, left1y], [right0x, right0y], [right1x, right1y] ]
-        #print(f"landmark: {res_lm}")
+                gender_label = get_gender(bboxes, img)
+                if boundary_box_flag == True:
+                    lw = 2 #max(round(sum(img.shape) / 2 * 0.003), 2)
+                    tf = max(lw - 1, 1)
+                    w, h = cv2.getTextSize(gender_label, 0, fontScale=lw/3, thickness=tf)[0]
+                    #p1_ = (xmin, ymin-h)
+                    p1, p2 = (int(xmin), int(ymax)), (int(xmax), int(ymax))
+                    outside = p1[1] - h >= 0
+                    p1= (p1[0]), (p1[1]-3)
+                    p2 = p1[0] + w, p1[1] - h - 3 if outside else p1[1] + h + 3
+                    #p2_ = (p1_[0]+w, p1_[1] - h  if outside else p1_[1] + h )
+                    cv2.rectangle(img, p1, p2, (255,0 , 0), -1, cv2.LINE_AA)  # filled
+                    cv2.putText(img, gender_label, (p1[0], p1[1] - 2 \
+                                if outside else p1[1] + h + 2), 0, lw / 3, (255, 255, 255), \
+                                thickness=tf, lineType=cv2.LINE_AA)
+                    #cv2.putText(img, gender_label, (p1[0], p1[1] - 2 \
+                    #            if outside else p1_[1] + h + 2), 0, lw, (255,255,255),\
+                    #            thickness=tf, lineType=cv2.LINE_AA)
+                    cv2.rectangle(img, (xmin, ymin), (xmax, ymax), (255, 0, 0), 2)
+                # Find facial landmarks (to find eyes)
+                face1=cv2.resize(face, (input_shape_lm[_W], input_shape_lm[_H]))
+                face1=face1.transpose((2,0,1))
+                face1=face1.reshape(input_shape_lm)
+                res_lm = exec_net_lm.infer(inputs={input_name_lm: face1})       # Run landmark detection
+                lm=res_lm[out_name_lm][0][:8].reshape(4,2)                      #  [[left0x, left0y], [left1x, left1y], [right0x, right0y], [right1x, right1y] ]
+                _X=0
+                _Y=1
+                # Landmark position memo...   lm[1] (eye) lm[0] (nose)  lm[2] (eye) lm[3]
+                eye_sizes   = [ abs(int((lm[0][_X]-lm[1][_X]) * face.shape[1])),\
+                                abs(int((lm[3][_X]-lm[2][_X]) * face.shape[1])) ] \
+                                # eye size in the cropped face image
+                eye_centers = [ [ int(((lm[0][_X]+lm[1][_X])/2 * face.shape[1])), \
+                                  int(((lm[0][_Y]+lm[1][_Y])/2 * face.shape[0])) ],\
+                                [ int(((lm[3][_X]+lm[2][_X])/2 * face.shape[1])), \
+                                  int(((lm[3][_Y]+lm[2][_Y])/2 * face.shape[0])) ]\
+                              ]  # eye center coordinate in the cropped face image
+                if eye_sizes[0]<4 or eye_sizes[1]<4:
+                    return img, [torch.Tensor(pred)], False
 
-        # Estimate head orientation (yaw=Y, pitch=X, role=Z)
-        #res_hp = exec_net_hp.infer(inputs={input_name_hp: face1}) # Run head pose estimation
-        #yaw   = res_hp['angle_y_fc'][0][0]
-        #pitch = res_hp['angle_p_fc'][0][0]
-        #roll  = res_hp['angle_r_fc'][0][0]
-        _X=0
-        _Y=1
-        # Landmark position memo...   lm[1] (eye) lm[0] (nose)  lm[2] (eye) lm[3]
-        eye_sizes   = [ abs(int((lm[0][_X]-lm[1][_X]) * face.shape[1])),\
-                        abs(int((lm[3][_X]-lm[2][_X]) * face.shape[1])) ] \
-                        # eye size in the cropped face image
-        eye_centers = [ [ int(((lm[0][_X]+lm[1][_X])/2 * face.shape[1])), \
-                          int(((lm[0][_Y]+lm[1][_Y])/2 * face.shape[0])) ],\
-                        [ int(((lm[3][_X]+lm[2][_X])/2 * face.shape[1])), \
-                          int(((lm[3][_Y]+lm[2][_Y])/2 * face.shape[0])) ]\
-                      ]  # eye center coordinate in the cropped face image
-        if eye_sizes[0]<4 or eye_sizes[1]<4:
-            return img, [torch.Tensor(pred)], False, age_gender_label
-
-        ratio = 0.7
-        eyes = []
-        for i in range(2):
-            # Crop eye images
-            is_eye_visible = True
-            x1 = int(eye_centers[i][_X]-eye_sizes[i]*ratio)
-            x2 = int(eye_centers[i][_X]+eye_sizes[i]*ratio)
-            y1 = int(eye_centers[i][_Y]-eye_sizes[i]*ratio)
-            y2 = int(eye_centers[i][_Y]+eye_sizes[i]*ratio)
-            #eyes.append(cv2.resize(face[y1:y2, x1:x2].copy(), (input_shape_gaze[_W], input_shape_gaze[_H])))    # crop and resize
-
-            # Draw eye boundary boxes
-            if boundary_box_flag == True:
-                cv2.rectangle(img, (x1+xmin,y1+ymin), (x2+xmin,y2+ymin), (0,255,0), 2)
-    return img, [torch.Tensor(pred)], is_eye_visible, age_gender_label
+                ratio = 0.7
+                eyes = []
+                for i in range(2):
+                    # Crop eye images
+                    is_eye_visible = True
+                    x1 = int(eye_centers[i][_X]-eye_sizes[i]*ratio)
+                    x2 = int(eye_centers[i][_X]+eye_sizes[i]*ratio)
+                    y1 = int(eye_centers[i][_Y]-eye_sizes[i]*ratio)
+                    y2 = int(eye_centers[i][_Y]+eye_sizes[i]*ratio)
+                    # Draw eye boundary boxes
+                    if boundary_box_flag == True:
+                        cv2.rectangle(img, (x1+xmin,y1+ymin), (x2+xmin,y2+ymin), (0,255,0), 2)
+    return img, [torch.Tensor(pred)], is_eye_visible
 
 def main():
 
