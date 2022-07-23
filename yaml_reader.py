@@ -17,6 +17,7 @@ class YamlReader:
         self.iou_thres = 0.1
         self.save_vid = True 
         self.model_version = "yolov4"
+        self.is_crop = None
         self.cfg = "yolov4/models/yolov4-csp-custom.cfg"
         self.device = 0
         self.fps = 25
@@ -43,6 +44,7 @@ class YamlReader:
         self.hide_class=False  # hide IDs
         self.half=False  # use FP16 half-precision inference
         self.dnn=False  # use OpenCV DNN for ONNX inference
+        self.bbox = False #Box where infer will perform [it could be head or person]
 
     def fetch_config(self):
         if 'yolo-weights' in self.objyaml:
@@ -71,6 +73,10 @@ class YamlReader:
             self.usecase = self.objyaml['usecase']
         if 'eye-model-type' in self.objyaml:
             self.eye_model_type = self.objyaml['eye-model-type']
+        if 'isCrop' in self.objyaml:
+            self.is_crop = self.objyaml['isCrop']
+        if 'bbox' in self.objyaml:
+            self.bbox = self.objyaml['bbox']
         if 'classes' in self.objyaml:
             self.classes = self.objyaml['classes']
 
