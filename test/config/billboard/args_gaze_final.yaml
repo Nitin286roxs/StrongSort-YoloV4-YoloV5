@@ -1,0 +1,38 @@
+yolo-weights: "/app/test/crowdhuman_yolov5m.pt"          # model.pt path(s) for Tyre Detection
+strong-sort: "osnet_x0_25_market1501.pt"                  # model.pt path,
+source: "/app/test/Billboard_test_final.mp4" 
+#source: "/app/test/videoplayback.mp4" #Billboard_test_final.mp4" 
+#source: "rtsp://localhost:8554/mystream" #"rtsp://admin:admin@192.168.0.90/:554/0/main"
+#source: "rtsp://admin:admin@192.168.0.90/:554/0/main"
+conf-thres: 0.8                                         # confidence threshold
+iou-thres: 0.1                                          # NMS IOU threshold
+save-vid: True                                          # save confidences in --save-txt labels
+model-version: "yolov5" #"openvino"                                   # yolo model-type yolov4 or v5
+eye-model-type: "openvino"
+cfg: "yolov4/models/yolov4-csp-custom.cfg"              # only Yolov4 use this cfg, for yolov5 can be none
+usecase: "Billboard"
+isCrop: True
+device: 0                                               # device
+fps: 10                                                 # output fps
+imgsz: [640,640]
+max_det: 1000
+show_vid: False
+save_txt: False  # save results to *.txt
+save_conf: False  # save confidences in --save-txt labels
+save_crop: False  # save cropped prediction boxes
+nosave: False  # do not save images/videos
+classes: 0  # filter by class: --class 0, or --class 0 2 3
+bbox: "head"
+agnostic_nms: False  # class-agnostic NMS
+augment: False  # augmented inference
+visualize: False  # visualize features
+update: False  # update all models
+project: "runs/track"  # save results to project/name
+name: 'exp'  # save results to project/name
+exist_ok: False  # existing project/name ok, do not increment
+line_thickness: 3  # bounding box thickness (pixels)
+hide_labels: False  # hide labels
+hide_conf: False  # hide confidences
+hide_class: False  # hide IDs
+half: False  # use FP16 half-precision inference
+dnn: False  # use OpenCV DNN for ONNX inference
